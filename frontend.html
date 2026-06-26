@@ -87,6 +87,15 @@ button{font-family:'Cairo',sans-serif;}
 .search-wrap input:focus{outline:none;border-color:var(--primary);background:var(--surface);}
 .search-wrap .search-ic{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-3);pointer-events:none;}
 .filter-select{padding:8px 12px 8px 32px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:'Cairo',sans-serif;background:var(--surface-3) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2394A3B8' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 10px center;appearance:none;color:var(--text);cursor:pointer;}
+
+/* SEARCHABLE SELECT (دروب داون بحث) */
+.searchable-select{position:relative;}
+.searchable-select input{cursor:text;}
+.searchable-dropdown{position:absolute;top:calc(100% + 4px);right:0;left:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);max-height:220px;overflow-y:auto;z-index:50;display:none;}
+.searchable-dropdown.open{display:block;}
+.searchable-option{padding:9px 12px;font-size:13.5px;cursor:pointer;color:var(--text);}
+.searchable-option:hover,.searchable-option.active{background:var(--primary-10);color:var(--primary-80);}
+.searchable-option-empty{padding:12px;font-size:12.5px;color:var(--text-3);text-align:center;}
 .filter-select:focus{outline:none;border-color:var(--primary);}
 
 .table-wrap{overflow-x:auto;}
@@ -768,12 +777,64 @@ function supervisorOptions(selected){
   return `<option value="">بدون مشرف</option>` + CACHE_SUPERVISORS.map(s=>`<option value="${s.id}" ${s.id==selected?"selected":""}>${s.full_name}</option>`).join("");
 }
 
-function openAddGroupModal(){
+/* =====================================================================
+   دروب داون بحث (Searchable Select) - يستخدم لقوائم طويلة زي المحافظات
+===================================================================== */
+function renderSearchableSelect(idPrefix, options, selectedId, placeholder){
+  // options: [{id, name}]
+  const selected = options.find(o => String(o.id) === String(selectedId));
+  const escAttr = (s)=> (s||"").replace(/"/g,"&quot;");
+  return `
+    <div class="searchable-select" id="${idPrefix}_wrap">
+      <input class="form-input" id="${idPrefix}_input" placeholder="${placeholder||'اكتب للبحث...'}" value="${escAttr(selected?selected.name:'')}" autocomplete="off">
+      <input type="hidden" id="${idPrefix}_value" value="${selected?selected.id:''}">
+      <div class="searchable-dropdown" id="${idPrefix}_dropdown"></div>
+    </div>
+  `;
+}
+
+function initSearchableSelect(idPrefix, options){
+  const input = document.getElementById(idPrefix+"_input");
+  const hidden = document.getElementById(idPrefix+"_value");
+  const dropdown = document.getElementById(idPrefix+"_dropdown");
+  if (!input || !hidden || !dropdown) return;
+
+  function renderList(filterText){
+    const f = (filterText||"").trim().toLowerCase();
+    const filtered = f ? options.filter(o => o.name.toLowerCase().includes(f)) : options;
+    dropdown.innerHTML = filtered.length ? filtered.map(o => `
+      <div class="searchable-option" data-id="${o.id}" data-name="${(o.name||"").replace(/"/g,"&quot;")}">${o.name}</div>
+    `).join("") : `<div class="searchable-option-empty">لا يوجد نتائج مطابقة</div>`;
+
+    dropdown.querySelectorAll(".searchable-option").forEach(el=>{
+      el.addEventListener("mousedown", (e)=>{
+        e.preventDefault();
+        hidden.value = el.dataset.id;
+        input.value = el.dataset.name;
+        dropdown.classList.remove("open");
+      });
+    });
+  }
+
+  input.addEventListener("focus", ()=>{ renderList(""); dropdown.classList.add("open"); });
+  input.addEventListener("input", ()=>{ hidden.value = ""; renderList(input.value); dropdown.classList.add("open"); });
+  input.addEventListener("blur", ()=>{ setTimeout(()=>dropdown.classList.remove("open"), 150); });
+}
+
+async function openAddGroupModal(){
+  // نجيب أحدث نسخة من المحافظات والمشرفين كل مرة، عشان مفيش حاجة "تتلخبط"
+  [CACHE_STAGES, CACHE_GOVS, CACHE_SUPERVISORS] = await Promise.all([
+    loadStages(), loadGovernorates(), loadSupervisorsList()
+  ]);
   openModal("إضافة مجموعة جديدة", `
     <div class="form-group"><label class="form-label">اسم المجموعة <span class="req">*</span></label><input class="form-input" id="f_g_name" placeholder="مثال: مجموعة السبت 4 عصر"></div>
     <div class="form-row-2">
       <div class="form-group"><label class="form-label">المرحلة</label><select class="form-select" id="f_g_stage">${stageOptions()}</select></div>
-      <div class="form-group"><label class="form-label">المحافظة</label><select class="form-select" id="f_g_gov">${govOptions()}</select></div>
+      <div class="form-group">
+        <label class="form-label">المحافظة</label>
+        ${renderSearchableSelect("f_g_gov", CACHE_GOVS, null, "دوس واكتب اسم المحافظة...")}
+        <div class="form-hint">مش لاقي المحافظة؟ <a href="#" onclick="event.preventDefault(); openGovernoratesModal();" style="color:var(--primary);font-weight:600;">ضيفها من هنا</a></div>
+      </div>
     </div>
     <div class="form-row-2">
       <div class="form-group"><label class="form-label">سعر الحصة</label><input class="form-input" id="f_g_price" type="number" placeholder="جنيه"></div>
@@ -784,15 +845,18 @@ function openAddGroupModal(){
     <button class="btn btn-ghost" onclick="closeOverlay('genericModal')">إلغاء</button>
     <button class="btn btn-primary" onclick="submitAddGroup()"><i data-lucide="check" style="width:14px;height:14px;"></i> إضافة</button>
   `);
+  initSearchableSelect("f_g_gov", CACHE_GOVS);
 }
 
 async function submitAddGroup(){
   const name = document.getElementById("f_g_name").value.trim();
+  const governorate_id = document.getElementById("f_g_gov_value").value;
   if (!name){ showToast("لازم تكتب اسم المجموعة", "error"); return; }
+  if (!governorate_id){ showToast("لازم تختار المحافظة من القائمة", "error"); return; }
   const body = {
     name,
     stage_id: parseInt(document.getElementById("f_g_stage").value),
-    governorate_id: parseInt(document.getElementById("f_g_gov").value),
+    governorate_id: parseInt(governorate_id),
     session_price: parseFloat(document.getElementById("f_g_price").value) || null,
     supervisor_id: document.getElementById("f_g_sup").value ? parseInt(document.getElementById("f_g_sup").value) : null,
     notes: document.getElementById("f_g_notes").value.trim() || null,
@@ -804,14 +868,20 @@ async function submitAddGroup(){
 }
 
 async function openEditGroupModal(id){
-  const groups = await loadGroups();
+  const [groups, stages, govs, supervisors] = await Promise.all([
+    loadGroups(), loadStages(), loadGovernorates(), loadSupervisorsList()
+  ]);
+  CACHE_STAGES = stages; CACHE_GOVS = govs; CACHE_SUPERVISORS = supervisors;
   const g = groups.find(x=>x.id===id);
   if (!g) return;
   openModal("تعديل المجموعة", `
     <div class="form-group"><label class="form-label">اسم المجموعة</label><input class="form-input" id="f_g_name" value="${g.name}"></div>
     <div class="form-row-2">
       <div class="form-group"><label class="form-label">المرحلة</label><select class="form-select" id="f_g_stage">${stageOptions(g.stage_id)}</select></div>
-      <div class="form-group"><label class="form-label">المحافظة</label><select class="form-select" id="f_g_gov">${govOptions(g.governorate_id)}</select></div>
+      <div class="form-group">
+        <label class="form-label">المحافظة</label>
+        ${renderSearchableSelect("f_g_gov", CACHE_GOVS, g.governorate_id, "دوس واكتب اسم المحافظة...")}
+      </div>
     </div>
     <div class="form-row-2">
       <div class="form-group"><label class="form-label">سعر الحصة</label><input class="form-input" id="f_g_price" type="number" value="${g.session_price||''}"></div>
@@ -822,13 +892,16 @@ async function openEditGroupModal(id){
     <button class="btn btn-ghost" onclick="closeOverlay('genericModal')">إلغاء</button>
     <button class="btn btn-primary" onclick="submitEditGroup(${id})"><i data-lucide="check" style="width:14px;height:14px;"></i> حفظ التغييرات</button>
   `);
+  initSearchableSelect("f_g_gov", CACHE_GOVS);
 }
 
 async function submitEditGroup(id){
+  const governorate_id = document.getElementById("f_g_gov_value").value;
+  if (!governorate_id){ showToast("لازم تختار المحافظة من القائمة", "error"); return; }
   const body = {
     name: document.getElementById("f_g_name").value.trim(),
     stage_id: parseInt(document.getElementById("f_g_stage").value),
-    governorate_id: parseInt(document.getElementById("f_g_gov").value),
+    governorate_id: parseInt(governorate_id),
     session_price: parseFloat(document.getElementById("f_g_price").value) || null,
     supervisor_id: document.getElementById("f_g_sup").value ? parseInt(document.getElementById("f_g_sup").value) : null,
     notes: document.getElementById("f_g_notes").value.trim() || null,
@@ -981,10 +1054,17 @@ async function submitAddStudent(){
   const res = await api("/api/students", {method:"POST", body: JSON.stringify(body)});
   closeOverlay("genericModal");
   renderStudentsPage();
-  openModal("تم إضافة الطالب بنجاح ✅", `
-    <p style="margin-bottom:10px;font-size:13.5px;color:var(--text-2);">ده كود دخول الطالب، اعطيه له عشان يسجل دخول بيه على المنصة:</p>
-    <div class="access-code-box">${res.access_code} <button class="action-btn" onclick="navigator.clipboard.writeText('${res.access_code}');showToast('تم نسخ الكود','success')" style="margin-right:auto;"><i data-lucide="copy" style="width:14px;height:14px;"></i></button></div>
-  `, `<button class="btn btn-primary" onclick="closeOverlay('genericModal')">تمام</button>`);
+  showStudentCodeModal(res.access_code, full_name);
+}
+
+function showStudentCodeModal(code, studentName){
+  openModal(`تم إضافة "${studentName}" بنجاح ✅`, `
+    <p style="margin-bottom:14px;font-size:13.5px;color:var(--text-2);">ده كود دخول الطالب - انسخه وادّيه له يسجل دخول بيه من تاب "الدخول بكود":</p>
+    <div style="display:flex;gap:8px;">
+      <input class="form-input" value="${code}" readonly onclick="this.select()" style="font-family:monospace;font-size:18px;font-weight:700;text-align:center;letter-spacing:2px;color:var(--primary-80);background:var(--primary-10);border-color:var(--primary-40);">
+      <button class="btn btn-primary" onclick="navigator.clipboard.writeText('${code}');showToast('تم نسخ الكود','success')" style="flex-shrink:0;"><i data-lucide="copy" style="width:15px;height:15px;"></i> نسخ</button>
+    </div>
+  `, `<button class="btn btn-primary btn-block" onclick="closeOverlay('genericModal')"><i data-lucide="check" style="width:14px;height:14px;"></i> تمام</button>`);
 }
 
 async function openEditStudentModal(id){
@@ -1021,9 +1101,7 @@ async function submitEditStudent(id){
 
 async function resetStudentCode(id){
   const res = await api(`/api/students/${id}/reset-code`, {method:"PUT"});
-  openModal("تم توليد كود جديد", `
-    <div class="access-code-box">${res.access_code} <button class="action-btn" onclick="navigator.clipboard.writeText('${res.access_code}');showToast('تم نسخ الكود','success')" style="margin-right:auto;"><i data-lucide="copy" style="width:14px;height:14px;"></i></button></div>
-  `, `<button class="btn btn-primary" onclick="closeOverlay('genericModal')">تمام</button>`);
+  showStudentCodeModal(res.access_code, "الطالب");
   renderStudentsPage();
 }
 
@@ -1107,21 +1185,27 @@ async function submitAddUser(role){
   renderUsersPage(role);
   const roleLabel = role === "supervisor" ? "المشرف" : "المدرس";
   openModal(`تم إضافة ${roleLabel} بنجاح ✅`, `
-    <p style="margin-bottom:10px;font-size:13.5px;color:var(--text-2);">دي بيانات الدخول، اعطيها له:</p>
+    <p style="margin-bottom:14px;font-size:13.5px;color:var(--text-2);">دي بيانات الدخول، انسخها وادّيها له:</p>
     <div class="form-group">
       <label class="form-label">اسم المستخدم</label>
-      <div class="access-code-box">${username}</div>
+      <input class="form-input" value="${username}" readonly onclick="this.select()" style="font-family:monospace;font-weight:700;">
     </div>
     ${res.generated_password ? `
     <div class="form-group">
       <label class="form-label">كلمة المرور (متولّدة تلقائيًا)</label>
-      <div class="access-code-box">${res.generated_password} <button class="action-btn" onclick="navigator.clipboard.writeText('${res.generated_password}');showToast('تم النسخ','success')" style="margin-right:auto;"><i data-lucide="copy" style="width:14px;height:14px;"></i></button></div>
+      <div style="display:flex;gap:8px;">
+        <input class="form-input" value="${res.generated_password}" readonly onclick="this.select()" style="font-family:monospace;font-weight:700;color:var(--primary-80);background:var(--primary-10);border-color:var(--primary-40);">
+        <button class="btn btn-primary btn-sm" onclick="navigator.clipboard.writeText('${res.generated_password}');showToast('تم النسخ','success')" style="flex-shrink:0;"><i data-lucide="copy" style="width:14px;height:14px;"></i></button>
+      </div>
     </div>` : ""}
     <div class="form-group">
       <label class="form-label">أو كود دخول سريع (بدون يوزر/باسورد)</label>
-      <div class="access-code-box">${res.access_code} <button class="action-btn" onclick="navigator.clipboard.writeText('${res.access_code}');showToast('تم النسخ','success')" style="margin-right:auto;"><i data-lucide="copy" style="width:14px;height:14px;"></i></button></div>
+      <div style="display:flex;gap:8px;">
+        <input class="form-input" value="${res.access_code}" readonly onclick="this.select()" style="font-family:monospace;font-weight:700;color:var(--primary-80);background:var(--primary-10);border-color:var(--primary-40);">
+        <button class="btn btn-primary btn-sm" onclick="navigator.clipboard.writeText('${res.access_code}');showToast('تم النسخ','success')" style="flex-shrink:0;"><i data-lucide="copy" style="width:14px;height:14px;"></i></button>
+      </div>
     </div>
-  `, `<button class="btn btn-primary" onclick="closeOverlay('genericModal')">تمام</button>`);
+  `, `<button class="btn btn-primary btn-block" onclick="closeOverlay('genericModal')"><i data-lucide="check" style="width:14px;height:14px;"></i> تمام</button>`);
 }
 
 async function openEditUserModal(id, role){

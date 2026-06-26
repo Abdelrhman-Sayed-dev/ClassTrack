@@ -61,9 +61,15 @@ def gen_token() -> str:
     return secrets.token_hex(24)
 
 
-def gen_access_code() -> str:
-    """كود دخول قصير للطالب (مثال: ST-4F92AB)"""
-    return "ST-" + secrets.token_hex(3).upper()
+def gen_access_code(prefix: str = "ST") -> str:
+    """كود دخول قصير (مثال: ST-4F92AB للطالب، SUP-4F92AB للمشرف، TCH-4F92AB للمدرس)"""
+    return f"{prefix}-" + secrets.token_hex(3).upper()
+
+
+def gen_temp_password() -> str:
+    """كلمة مرور مؤقتة سهلة القراءة، تتولّد تلقائيًا للمشرف/المدرس لو الأدمن سايب خانة كلمة المرور فاضية"""
+    alphabet = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(10))
 
 
 def session_expiry() -> str:
@@ -125,7 +131,7 @@ def init_db():
         """)
 
         # ---------------------------------------------------------------
-        # المستخدمين (أدمن - مدرس - مشرف) - تسجيل دخول بيوزر وباسورد
+        # المستخدمين (أدمن - مدرس - مشرف) - تسجيل دخول بيوزر وباسورد، أو بكود دخول
         # ---------------------------------------------------------------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -135,10 +141,12 @@ def init_db():
             role TEXT NOT NULL CHECK(role IN ('admin','teacher','supervisor')),
             full_name TEXT NOT NULL,
             phone TEXT,
+            access_code TEXT UNIQUE,
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
         """)
+        _safe_alter(cur, "ALTER TABLE users ADD COLUMN access_code TEXT")
 
         # جلسات الدخول (توكنات بسيطة) - كل توكن له تاريخ انتهاء صلاحية
         cur.execute("""

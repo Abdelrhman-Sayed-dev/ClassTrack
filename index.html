@@ -223,7 +223,7 @@ tbody tr:hover{background:var(--primary-10);}
 
     <div class="login-tabs">
       <button class="login-tab active" data-tab="staff" onclick="switchLoginTab('staff')">تسجيل دخول الموظفين</button>
-      <button class="login-tab" data-tab="student" onclick="switchLoginTab('student')">دخول الطالب</button>
+      <button class="login-tab" data-tab="student" onclick="switchLoginTab('student')">الدخول بكود</button>
     </div>
 
     <div id="loginError" class="login-error"></div>
@@ -243,12 +243,12 @@ tbody tr:hover{background:var(--primary-10);}
       </button>
     </form>
 
-    <!-- دخول الطالب بالكود -->
+    <!-- دخول بالكود (طالب أو مشرف أو مدرس) -->
     <form id="studentLoginForm" class="hidden" onsubmit="return handleStudentLogin(event)">
       <div class="form-group">
         <label class="form-label">كود الدخول الخاص بك</label>
         <input class="form-input" id="loginAccessCode" placeholder="مثال: ST-4F92AB" required style="font-family:monospace;text-align:center;letter-spacing:1px;">
-        <div class="form-hint">كود الدخول بتاخده من المشرف المسؤول عن مجموعتك</div>
+        <div class="form-hint">الطالب بياخد كوده من المشرف، والمشرف/المدرس بياخد كوده من الأدمن</div>
       </div>
       <button class="btn btn-primary btn-block" type="submit">
         <i data-lucide="log-in" style="width:15px;height:15px;"></i> دخول
@@ -440,7 +440,7 @@ async function handleStudentLogin(ev){
   hideLoginError();
   const access_code = document.getElementById("loginAccessCode").value.trim();
   try{
-    const res = await fetch(API + "/api/auth/student-login", {
+    const res = await fetch(API + "/api/auth/login-code", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({access_code})
     });

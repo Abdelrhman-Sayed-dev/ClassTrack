@@ -48,7 +48,7 @@ init_db()
 
 # مجلد رفع الصور (سبورة الحصص) - بيتم تخزين الصور كملفات على الـ disk
 # مش base64 جوه قاعدة البيانات، عشان الداتابيز ما تكبرش وتبقى بطيئة
-UPLOADS_DIR = os.environ.get("UPLOADS_DIR", "uploads")
+UPLOADS_DIR = os.environ.get("UPLOADS_DIR", os.path.join(os.environ.get("DATA_DIR", "."), "uploads"))
 BOARD_IMAGES_DIR = os.path.join(UPLOADS_DIR, "board_images")
 os.makedirs(BOARD_IMAGES_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
@@ -62,6 +62,12 @@ class GovernorateIn(BaseModel):
     name: str
 
 
+class ScheduleSlotIn(BaseModel):
+    day_of_week: str
+    start_time: str
+    end_time: Optional[str] = None
+
+
 class GroupIn(BaseModel):
     name: str
     stage_id: int
@@ -69,6 +75,7 @@ class GroupIn(BaseModel):
     notes: Optional[str] = None
     session_price: Optional[float] = None
     supervisor_id: Optional[int] = None
+    schedule_slots: Optional[list[ScheduleSlotIn]] = None  # مواعيد المجموعة (يوم + وقت)
 
 
 class StudentIn(BaseModel):
@@ -99,6 +106,12 @@ class AttendanceIn(BaseModel):
     session_date: str
     status: str  # present / absent / late / excused
     notes: Optional[str] = None
+
+
+class AttendanceCodeIn(BaseModel):
+    access_code: str
+    session_date: str
+    status: str
 
 
 class LoginIn(BaseModel):
@@ -468,7 +481,19 @@ def add_group(group: GroupIn, session=Depends(require_roles("admin"))):
             )
         except Exception:
             raise HTTPException(status_code=400, detail="المجموعة دي موجودة بالفعل في نفس المرحلة والمحافظة")
-        return {"id": cur.lastrowid, "message": "تم إضافة المجموعة بنجاح"}
+
+        group_id = cur.lastrowid
+
+        # إضافة مواعيد المجموعة (لو حددها الأدمن) - تتسجل في جدول المواعيد العام تلقائيًا
+        if group.schedule_slots:
+            for slot in group.schedule_slots:
+                conn.execute(
+                    """INSERT INTO teacher_schedule (day_of_week, start_time, end_time, group_id, title)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (slot.day_of_week, slot.start_time, slot.end_time, group_id, f"حصة {group.name}")
+                )
+
+        return {"id": group_id, "message": "تم إضافة المجموعة بنجاح"}
 
 
 @app.put("/api/groups/{group_id}")
@@ -1076,6 +1101,45 @@ def set_attendance(att: AttendanceIn, session=Depends(require_roles("admin", "te
         return {"message": "تم حفظ الحضور"}
 
 
+@app.get("/api/students/find-by-code")
+def find_student_by_code(code: str, session=Depends(require_roles("admin", "teacher", "supervisor"))):
+    """البحث عن طالب بكود الدخول الخاص بيه - يستخدم في تسجيل الحضور السريع"""
+    with get_connection() as conn:
+        student = conn.execute(
+            """SELECT s.id, s.full_name, s.group_id, g.name as group_name
+               FROM students s JOIN groups g ON g.id = s.group_id
+               WHERE s.access_code = ?""",
+            (code.strip(),)
+        ).fetchone()
+        if not student:
+            raise HTTPException(status_code=404, detail="مفيش طالب بالكود ده")
+        if session["role"] == "supervisor":
+            assert_supervisor_owns_group(conn, session, student["group_id"])
+        return dict(student)
+
+
+@app.post("/api/attendance/by-code")
+def set_attendance_by_code(data: AttendanceCodeIn, session=Depends(require_roles("admin", "teacher", "supervisor"))):
+    """تسجيل حضور سريع بكود الطالب - المشرف بيدوّر بالكود ويسجل الحالة على طول"""
+    with get_connection() as conn:
+        student = conn.execute(
+            "SELECT id, full_name, group_id FROM students WHERE access_code=?",
+            (data.access_code.strip(),)
+        ).fetchone()
+        if not student:
+            raise HTTPException(status_code=404, detail="مفيش طالب بالكود ده")
+        if session["role"] == "supervisor":
+            assert_supervisor_owns_group(conn, session, student["group_id"])
+
+        conn.execute("""
+            INSERT INTO attendance (student_id, session_date, status)
+            VALUES (?, ?, ?)
+            ON CONFLICT(student_id, session_date)
+            DO UPDATE SET status=excluded.status
+        """, (student["id"], data.session_date, data.status))
+        return {"message": "تم تسجيل الحضور", "student_name": student["full_name"], "student_id": student["id"]}
+
+
 @app.get("/api/students/{student_id}/attendance")
 def get_student_attendance(student_id: int, session=Depends(get_current_session)):
     with get_connection() as conn:
@@ -1247,8 +1311,8 @@ def get_monthly_report(student_id: int, month: str, session=Depends(get_current_
 
         if session["role"] == "supervisor":
             assert_supervisor_owns_group(conn, session, student["group_id"])
-        elif session["role"] == "student" and session["id"] != student_id:
-            raise HTTPException(status_code=403, detail="تقدر تشوف تقريرك بس")
+        elif session["role"] == "student":
+            raise HTTPException(status_code=403, detail="التقرير الشهري متاح للمدرس والمشرف والأدمن بس")
 
         attendance_rows = conn.execute("""
             SELECT session_date, status FROM attendance

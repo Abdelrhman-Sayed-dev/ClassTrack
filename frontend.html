@@ -1251,7 +1251,8 @@ function deleteStudent(id, name){
    المشرفين والمدرسين - Users Management (أدمن فقط)
 ===================================================================== */
 async function renderUsersPage(role){
-  const users = await api(`/api/users?role=${role}`);
+  const [users, govs] = await Promise.all([api(`/api/users?role=${role}`), loadGovernorates()]);
+  CACHE_GOVS = govs;
   const roleLabel = role === "supervisor" ? "المشرف" : "المدرس";
   const c = document.getElementById("pageContainer");
   c.innerHTML = `
@@ -1263,7 +1264,7 @@ async function renderUsersPage(role){
     </div>
     <div class="table-card">
       <div class="table-wrap"><table>
-        <thead><tr><th>#</th><th>الاسم</th><th>اسم المستخدم</th><th>كود الدخول</th><th>الهاتف</th>${role==='supervisor'?'<th>المجموعات المسؤول عنها</th>':''}<th>الحالة</th><th></th></tr></thead>
+        <thead><tr><th>#</th><th>الاسم</th><th>اسم المستخدم</th><th>كود الدخول</th><th>الهاتف</th>${role==='supervisor'?'<th>المحافظة</th><th>المجموعات المسؤول عنها</th>':''}<th>الحالة</th><th></th></tr></thead>
         <tbody>
           ${users.map(u=>`
             <tr>
@@ -1272,7 +1273,9 @@ async function renderUsersPage(role){
               <td><code style="font-size:12.5px;">${u.username}</code></td>
               <td><code style="font-size:12px;background:var(--surface-3);padding:3px 8px;border-radius:6px;">${u.access_code||"—"}</code></td>
               <td>${u.phone||"—"}</td>
-              ${role==='supervisor' ? `<td>${(u.groups&&u.groups.length) ? u.groups.map(g=>`<span class="badge badge-teal" style="margin:2px;">${g.name}</span>`).join("") : `<span class="badge badge-gray">بدون مجموعة</span>`}</td>` : ''}
+              ${role==='supervisor' ? `
+              <td>${u.governorate_name ? `<span class="badge badge-blue"><i data-lucide="map-pin" style="width:11px;height:11px;"></i> ${u.governorate_name}</span>` : `<span class="badge badge-gray">بدون محافظة</span>`}</td>
+              <td>${(u.groups&&u.groups.length) ? u.groups.map(g=>`<span class="badge badge-teal" style="margin:2px;">${g.name}</span>`).join("") : `<span class="badge badge-gray">بدون مجموعة</span>`}</td>` : ''}
               <td>${u.is_active ? `<span class="badge badge-green">مفعّل</span>` : `<span class="badge badge-red">موقوف</span>`}</td>
               <td class="td-actions">
                 ${u.phone ? `<button class="action-btn" title="تواصل" onclick="openContactPopup('${u.full_name.replace(/'/g,"")}', '${u.phone}')"><i data-lucide="phone" style="width:15px;height:15px;"></i></button><span class="act-divider"></span>` : ""}
@@ -1280,11 +1283,12 @@ async function renderUsersPage(role){
                 <button class="act-btn act-edit" title="تعديل بيانات ${roleLabel}" onclick="openEditUserModal(${u.id}, '${role}')"><i data-lucide="pencil" style="width:13px;height:13px;"></i>تعديل</button>
                 <button class="act-btn act-del" title="حذف ${roleLabel} نهائيًا" onclick="deleteUser(${u.id}, '${u.full_name.replace(/'/g,"")}', '${role}')"><i data-lucide="trash-2" style="width:13px;height:13px;"></i>حذف</button>
               </td>
-            </tr>`).join("") || `<tr><td colspan="8" style="text-align:center;color:var(--text-3);padding:30px;">لا يوجد ${roleLabel.replace('ال','')}ين بعد</td></tr>`}
+            </tr>`).join("") || `<tr><td colspan="9" style="text-align:center;color:var(--text-3);padding:30px;">لا يوجد ${roleLabel.replace('ال','')}ين بعد</td></tr>`}
         </tbody>
       </table></div>
     </div>
   `;
+  icons();
 }
 
 function openAddUserModal(role){
@@ -1295,12 +1299,16 @@ function openAddUserModal(role){
       <div class="form-group"><label class="form-label">اسم المستخدم <span class="req">*</span></label><input class="form-input" id="f_u_username"></div>
       <div class="form-group"><label class="form-label">كلمة المرور</label><input class="form-input" id="f_u_password" type="text" placeholder="سيبها فاضية ليتولّد باسورد تلقائي"></div>
     </div>
-    <div class="form-group"><label class="form-label">رقم الهاتف</label><input class="form-input" id="f_u_phone"></div>
+    <div class="form-row-2">
+      <div class="form-group"><label class="form-label">رقم الهاتف</label><input class="form-input" id="f_u_phone"></div>
+      ${role === "supervisor" ? `<div class="form-group"><label class="form-label">المحافظة</label>${renderSearchableSelect("f_u_gov", CACHE_GOVS, null, "دوس واكتب اسم المحافظة...")}</div>` : ""}
+    </div>
     <div class="form-hint">${roleLabel} هيقدر كمان يسجل دخول بكود سريع بدل اليوزر/الباسورد - هيتولّد تلقائي وتقدر تعطيه له بعد الإضافة.</div>
   `, `
     <button class="btn btn-ghost" onclick="closeOverlay('genericModal')">إلغاء</button>
     <button class="btn btn-primary" onclick="submitAddUser('${role}')"><i data-lucide="check" style="width:14px;height:14px;"></i> إضافة</button>
   `);
+  if (role === "supervisor") initSearchableSelect("f_u_gov", CACHE_GOVS);
 }
 
 async function submitAddUser(role){
@@ -1308,9 +1316,11 @@ async function submitAddUser(role){
   const username = document.getElementById("f_u_username").value.trim();
   const password = document.getElementById("f_u_password").value.trim();
   if (!full_name || !username){ showToast("لازم تملأ الاسم واسم المستخدم", "error"); return; }
+  const govEl = document.getElementById("f_u_gov_value");
   const res = await api("/api/users", {method:"POST", body: JSON.stringify({
     full_name, username, password: password || null, role,
-    phone: document.getElementById("f_u_phone").value.trim() || null
+    phone: document.getElementById("f_u_phone").value.trim() || null,
+    governorate_id: (govEl && govEl.value) ? parseInt(govEl.value) : null
   })});
   closeOverlay("genericModal");
   renderUsersPage(role);
@@ -1343,14 +1353,19 @@ async function openEditUserModal(id, role){
   const users = await api(`/api/users?role=${role}`);
   const u = users.find(x=>x.id===id);
   if (!u) return;
+  if (role === "supervisor" && (!CACHE_GOVS || !CACHE_GOVS.length)) CACHE_GOVS = await loadGovernorates();
   openModal("تعديل البيانات", `
     <div class="form-group"><label class="form-label">الاسم بالكامل</label><input class="form-input" id="f_u_name" value="${u.full_name}"></div>
-    <div class="form-group"><label class="form-label">رقم الهاتف</label><input class="form-input" id="f_u_phone" value="${u.phone||''}"></div>
+    <div class="form-row-2">
+      <div class="form-group"><label class="form-label">رقم الهاتف</label><input class="form-input" id="f_u_phone" value="${u.phone||''}"></div>
+      ${role === "supervisor" ? `<div class="form-group"><label class="form-label">المحافظة</label>${renderSearchableSelect("f_u_gov", CACHE_GOVS, u.governorate_id, "دوس واكتب اسم المحافظة...")}</div>` : ""}
+    </div>
     <div class="form-group"><label class="form-label">كلمة مرور جديدة (اختياري)</label><input class="form-input" id="f_u_password" placeholder="سيبه فاضي لو مش هتغيّرها"></div>
   `, `
     <button class="btn btn-ghost" onclick="closeOverlay('genericModal')">إلغاء</button>
     <button class="btn btn-primary" onclick="submitEditUser(${id}, '${role}')"><i data-lucide="check" style="width:14px;height:14px;"></i> حفظ التغييرات</button>
   `);
+  if (role === "supervisor") initSearchableSelect("f_u_gov", CACHE_GOVS);
 }
 
 async function submitEditUser(id, role){
@@ -1358,6 +1373,10 @@ async function submitEditUser(id, role){
     full_name: document.getElementById("f_u_name").value.trim(),
     phone: document.getElementById("f_u_phone").value.trim() || null,
   };
+  if (role === "supervisor"){
+    const govEl = document.getElementById("f_u_gov_value");
+    body.governorate_id = (govEl && govEl.value) ? parseInt(govEl.value) : null;
+  }
   const pass = document.getElementById("f_u_password").value;
   if (pass) body.password = pass;
   await api(`/api/users/${id}`, {method:"PUT", body: JSON.stringify(body)});

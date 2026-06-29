@@ -296,14 +296,25 @@ tbody tr:hover{background:var(--primary-10);}
   .sidebar-backdrop.open{display:block;opacity:1;pointer-events:all;}
   .stats-grid{grid-template-columns:1fr 1fr;}
   .form-row-2{grid-template-columns:1fr;}
-  .topbar{padding:0 14px;}
+  .topbar{padding:0 10px;height:52px;position:sticky;top:0;z-index:100;width:100%;box-sizing:border-box;}
+  .topbar-left{min-width:0;flex:1;overflow:hidden;}
+  .topbar-left .breadcrumb{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;}
+  .topbar-right{flex-shrink:0;gap:4px;}
+  .topbar-date{font-size:10px;padding:0 2px;white-space:nowrap;}
   .page-header{flex-direction:column;align-items:stretch;}
-  .header-actions{width:100%;}
+  .header-actions{width:100%;flex-wrap:wrap;}
   .header-actions .form-input,.header-actions select{flex:1;min-width:0;}
+  .page{padding:14px 12px;}
 }
 @media (max-width:520px){
   .stats-grid{grid-template-columns:1fr;}
-  .modal{width:100%;border-radius:var(--radius-lg);}
+  .modal{width:calc(100vw - 20px);max-width:100%;border-radius:var(--radius-lg);}
+  .topbar-date{display:none;}
+  .page-header h1{font-size:16px;}
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+  .toolbar{flex-wrap:wrap;gap:8px;}
+  .header-actions{gap:6px;}
+  .btn-block{width:100%;justify-content:center;}
 }
 </style>
 </head>
@@ -629,6 +640,7 @@ const NAV_BY_ROLE = {
     {id:"schedule", label:"جدول المواعيد", icon:"calendar-clock"},
     {id:"quizzes", label:"الكويزات", icon:"file-check-2"},
     {id:"attendance", label:"الحضور والغياب", icon:"calendar-check"},
+    {id:"student_search", label:"بحث عن طالب", icon:"search"},
   ],
   teacher: [
     {id:"dashboard", label:"لوحة التحكم", icon:"layout-dashboard"},
@@ -638,20 +650,20 @@ const NAV_BY_ROLE = {
     {id:"quizzes", label:"الكويزات", icon:"file-check-2"},
     {id:"attendance", label:"الحضور والغياب", icon:"calendar-check"},
     {id:"boards", label:"سبورة الحصص", icon:"presentation"},
+    {id:"student_search", label:"بحث عن طالب", icon:"search"},
   ],
   supervisor: [
     {id:"mygroup", label:"مجموعتي", icon:"users"},
     {id:"boards", label:"سبورة الحصة", icon:"presentation"},
     {id:"quizzes", label:"الكويزات", icon:"file-check-2"},
     {id:"attendance", label:"الحضور والغياب", icon:"calendar-check"},
-    {id:"schedule", label:"جدول المواعيد", icon:"calendar-clock"},
+    {id:"student_search", label:"بحث عن طالب", icon:"search"},
   ],
   student: [
     {id:"mydashboard", label:"لوحتي", icon:"layout-dashboard"},
     {id:"myscores", label:"درجاتي", icon:"file-check-2"},
     {id:"myattendance", label:"حضوري", icon:"calendar-check"},
     {id:"myboard", label:"سبورة مجموعتي", icon:"presentation"},
-    {id:"schedule", label:"جدول المواعيد", icon:"calendar-clock"},
   ],
 };
 
@@ -713,6 +725,7 @@ const PAGE_TITLES = {
   quizzes:"الكويزات", attendance:"الحضور والغياب", boards:"سبورة الحصص",
   mygroup:"مجموعتي", mydashboard:"لوحتي", myscores:"درجاتي",
   myattendance:"حضوري", myboard:"سبورة مجموعتي",
+  student_search:"بحث عن طالب",
 };
 
 async function renderPage(page){
@@ -736,6 +749,7 @@ async function renderPage(page){
       myscores: renderMyScoresPage,
       myattendance: renderMyAttendancePage,
       myboard: renderMyBoardPage,
+      student_search: renderStudentSearchPage,
     };
     const fn = renderers[page];
     if (fn) await fn();
@@ -1617,22 +1631,29 @@ async function openQuizScoresModal(quizId, title, maxScore){
   const canEdit = SESSION.role !== "student";
   openModal(`درجات: ${title}`, `
     <div class="table-wrap" style="margin:-10px -10px;"><table>
-      <thead><tr><th>الطالب</th><th>الدرجة (من ${maxScore})</th></tr></thead>
+      <thead><tr><th>الطالب</th><th>الدرجة (من ${maxScore})</th>${canEdit?'<th></th>':''}</tr></thead>
       <tbody>
         ${rows.map(r=>`
           <tr>
             <td class="td-name">${r.full_name}</td>
-            <td>${canEdit ? `<input class="form-input" style="width:90px;display:inline-block;" type="number" max="${maxScore}" min="0" value="${r.score??''}" onchange="saveQuizScore(${quizId}, ${r.student_id}, this.value)">` : (r.score ?? "—")}</td>
-          </tr>`).join("") || `<tr><td colspan="2" style="text-align:center;color:var(--text-3);">لا يوجد طلاب</td></tr>`}
+            <td>${canEdit
+              ? `<input class="form-input" id="score_${r.student_id}" style="width:90px;display:inline-block;" type="number" max="${maxScore}" min="0" value="${r.score??''}" onkeydown="if(event.key==='Enter'){event.preventDefault();saveQuizScore(${quizId}, ${r.student_id}, this.value, this)}">`
+              : (r.score ?? "—")
+            }</td>
+            ${canEdit ? `<td><button class="btn btn-primary btn-sm" onclick="saveQuizScore(${quizId}, ${r.student_id}, document.getElementById('score_${r.student_id}').value, document.getElementById('score_${r.student_id}'))"><i data-lucide="save" style="width:13px;height:13px;"></i> حفظ</button></td>` : ''}
+          </tr>`).join("") || `<tr><td colspan="3" style="text-align:center;color:var(--text-3);">لا يوجد طلاب</td></tr>`}
       </tbody>
     </table></div>
   `, `<button class="btn btn-ghost" onclick="closeOverlay('genericModal')">إغلاق</button>`);
 }
 
-async function saveQuizScore(quizId, studentId, value){
-  if (value === "") return;
-  await api("/api/scores", {method:"POST", body: JSON.stringify({quiz_id: quizId, student_id: studentId, score: parseFloat(value)})});
-  showToast("تم حفظ الدرجة", "success");
+async function saveQuizScore(quizId, studentId, value, inputEl){
+  if (value === "") { showToast("لازم تكتب الدرجة الأول", "error"); return; }
+  const score = parseFloat(value);
+  if (isNaN(score)) { showToast("الدرجة مش صح", "error"); return; }
+  await api("/api/scores", {method:"POST", body: JSON.stringify({quiz_id: quizId, student_id: studentId, score})});
+  showToast("تم حفظ الدرجة ✅", "success");
+  if (inputEl) { inputEl.style.borderColor = "var(--success)"; setTimeout(()=>{ inputEl.style.borderColor=""; }, 1500); }
 }
 
 /* =====================================================================
@@ -1993,18 +2014,62 @@ async function renderMyGroupPage(){
    صفحات الطالب
 ===================================================================== */
 async function renderStudentDashboardPage(){
-  const [scores, attendance, groups] = await Promise.all([
+  const [scores, attendance, groupInfo] = await Promise.all([
     api(`/api/students/${SESSION.id}/scores`),
     api(`/api/students/${SESSION.id}/attendance`),
-    loadGroups()
+    SESSION.group_id ? api(`/api/groups/${SESSION.group_id}/info`).catch(()=>null) : Promise.resolve(null)
   ]);
   const present = attendance.filter(a=>a.status==='present').length;
   const avg = scores.length ? (scores.reduce((s,x)=>s+(x.score||0)/x.max_score*100,0)/scores.length).toFixed(0) : "—";
+
+  // بناء كارت المجموعة والمشرف
+  const supPhone = groupInfo?.supervisor_phone;
+  const supWaNum = supPhone ? normalizePhoneForWa(supPhone) : null;
+  const scheduleRows = (groupInfo?.schedule || []);
+  const DAYS_AR = {السبت:"السبت", الأحد:"الأحد", الإثنين:"الإثنين", الثلاثاء:"الثلاثاء", الأربعاء:"الأربعاء", الخميس:"الخميس", الجمعة:"الجمعة"};
+
   const c = document.getElementById("pageContainer");
   c.innerHTML = `
     <div class="page-header">
-      <div><h1>أهلاً، ${SESSION.full_name} 👋</h1><p>مجموعتك: ${groups[0]?.name || '—'}</p></div>
+      <div><h1>أهلاً، ${SESSION.full_name} 👋</h1><p>${groupInfo ? groupInfo.name : '—'}</p></div>
     </div>
+
+    ${groupInfo ? `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px;">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;box-shadow:var(--shadow-sm);">
+        <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">مجموعتي</div>
+        <div style="font-weight:700;font-size:15px;margin-bottom:4px;">${groupInfo.name}</div>
+        <div style="margin-bottom:8px;">
+          <span class="badge badge-teal">${groupInfo.stage_name}</span>
+          <span class="badge badge-gray" style="margin-right:4px;">${groupInfo.governorate_name}</span>
+        </div>
+        ${scheduleRows.length ? `
+        <div style="font-size:11px;font-weight:700;color:var(--text-3);margin-bottom:6px;margin-top:10px;">مواعيد المجموعة</div>
+        ${scheduleRows.map(s=>`
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">
+            <span style="background:var(--primary-10);color:var(--primary);font-size:11px;font-weight:700;padding:3px 8px;border-radius:6px;">${s.day_of_week}</span>
+            <span style="font-size:12px;color:var(--text-2);">${s.start_time}${s.end_time?' - '+s.end_time:''}</span>
+          </div>
+        `).join("")}` : '<div style="font-size:12px;color:var(--text-3);margin-top:8px;">لا يوجد مواعيد مضافة بعد</div>'}
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;box-shadow:var(--shadow-sm);">
+        <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">مشرفي الخاص</div>
+        ${groupInfo.supervisor_name ? `
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+            <div style="width:38px;height:38px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:15px;flex-shrink:0;">${groupInfo.supervisor_name[0]||'؟'}</div>
+            <div>
+              <div style="font-weight:700;font-size:14px;">${groupInfo.supervisor_name}</div>
+              <div style="font-size:12px;color:var(--text-3);">مشرف المجموعة</div>
+            </div>
+          </div>
+          ${supWaNum ? `
+          <a href="https://wa.me/${supWaNum}" target="_blank" class="btn btn-primary btn-sm btn-block" style="background:#25D366;justify-content:center;display:flex;gap:6px;">
+            <i data-lucide="message-circle" style="width:14px;height:14px;"></i> تواصل مع مشرفك عبر واتساب
+          </a>` : `<div style="font-size:12px;color:var(--text-3);">رقم المشرف مش متاح</div>`}
+        ` : `<div style="font-size:13px;color:var(--text-3);">مفيش مشرف معيّن للمجموعة دي بعد</div>`}
+      </div>
+    </div>` : ""}
+
     <div class="stats-grid">
       <div class="stat-card"><div class="stat-top"><div class="stat-icon teal"><i data-lucide="file-check-2" style="width:18px;height:18px;"></i></div></div>
         <div class="stat-value">${scores.length}</div><div class="stat-label">عدد الكويزات</div></div>
@@ -2094,8 +2159,110 @@ async function renderMyBoardPage(){
 }
 
 /* =====================================================================
-   الملاحظات السلوكية - Behavior Notes (المشرف بيكتبها - تظهر للمدرس والأدمن)
+   بحث عن طالب بالاسم أو الـ ID - يظهر كل درجاته وحضوره
 ===================================================================== */
+async function renderStudentSearchPage(){
+  const c = document.getElementById("pageContainer");
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1>بحث عن طالب</h1><p>ادخل اسم الطالب أو الـ ID تظهرلك كل بياناته ودرجاته وحضوره</p></div>
+    </div>
+    <div class="table-card">
+      <div class="toolbar">
+        <div class="search-wrap" style="flex:1;max-width:420px;">
+          <i data-lucide="search" class="search-ic" style="width:14px;height:14px;"></i>
+          <input id="ss_input" class="form-input" placeholder="اكتب اسم الطالب أو الـ ID..." oninput="debounceStudentSearch()" style="padding-right:38px;">
+        </div>
+      </div>
+      <div id="ss_results" style="padding:20px 16px;color:var(--text-3);font-size:13px;">ابدأ الكتابة لتظهر النتائج...</div>
+    </div>
+  `;
+  icons();
+}
+
+let _ssTimer = null;
+function debounceStudentSearch(){
+  clearTimeout(_ssTimer);
+  _ssTimer = setTimeout(doStudentSearch, 350);
+}
+
+async function doStudentSearch(){
+  const q = document.getElementById("ss_input")?.value.trim();
+  const el = document.getElementById("ss_results");
+  if (!el) return;
+  if (!q || q.length < 1){ el.innerHTML = '<span style="color:var(--text-3);font-size:13px;">ابدأ الكتابة لتظهر النتائج...</span>'; return; }
+  el.innerHTML = '<div class="loading-row"><span class="spinner"></span> بيبحث...</div>';
+  try {
+    const results = await api(`/api/students/search?q=${encodeURIComponent(q)}`);
+    if (!results.length){
+      el.innerHTML = `<div class="empty-state"><div class="empty-icon"><i data-lucide="user-x" style="width:22px;height:22px;"></i></div><div class="empty-title">مفيش طالب بالبيانات دي</div></div>`;
+      icons(); return;
+    }
+    el.innerHTML = results.map(s => {
+      const att = s.attendance_summary || {};
+      const totalAtt = Object.values(att).reduce((a,b)=>a+b, 0);
+      const pctPresent = totalAtt ? Math.round(((att.present||0)/totalAtt)*100) : 0;
+      const avgScore = s.scores.length
+        ? (s.scores.reduce((sum, sc) => sum + ((sc.score??0)/sc.max_score*100), 0) / s.scores.length).toFixed(0)
+        : null;
+      return `
+        <div style="border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;margin-bottom:14px;background:var(--surface);">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+            <div>
+              <div style="font-weight:700;font-size:15px;">${s.full_name}
+                <span style="font-size:12px;color:var(--text-3);font-weight:400;font-family:monospace;margin-right:8px;">#${s.id}</span>
+              </div>
+              <div style="margin-top:4px;">
+                <span class="badge badge-teal">${s.group_name}</span>
+                <span class="badge badge-gray" style="margin-right:4px;">${s.stage_name}</span>
+                <span class="badge badge-blue" style="margin-right:4px;">${s.governorate_name}</span>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              ${(s.phone||s.parent_phone) ? `<button class="action-btn" title="تواصل" onclick="openContactPopup('${s.full_name.replace(/'/g,"")}','${s.phone||""}','${s.parent_phone||""}')"><i data-lucide="phone" style="width:15px;height:15px;"></i></button>` : ""}
+              <button class="action-btn" title="تقرير شهري" onclick="openMonthlyReportModal(${s.id},'${s.full_name.replace(/'/g,"")}')"><i data-lucide="file-bar-chart" style="width:15px;height:15px;"></i></button>
+              <button class="action-btn" title="ملاحظات سلوكية" onclick="openBehaviorNotesModal(${s.id},'${s.full_name.replace(/'/g,"")}')"><i data-lucide="message-square-text" style="width:15px;height:15px;"></i></button>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+            <div style="background:var(--surface-2);border-radius:var(--radius-md);padding:10px 14px;">
+              <div style="font-size:11px;color:var(--text-3);margin-bottom:4px;">متوسط الدرجات</div>
+              <div style="font-size:18px;font-weight:700;color:${avgScore!==null?(avgScore>=50?'var(--success)':'var(--danger)'):'var(--text-3)'};">${avgScore !== null ? avgScore+'%' : '—'}</div>
+              <div style="font-size:11px;color:var(--text-3);">${s.scores.length} كويز</div>
+            </div>
+            <div style="background:var(--surface-2);border-radius:var(--radius-md);padding:10px 14px;">
+              <div style="font-size:11px;color:var(--text-3);margin-bottom:4px;">نسبة الحضور</div>
+              <div style="font-size:18px;font-weight:700;color:${pctPresent>=75?'var(--success)':'var(--danger)'};">${totalAtt ? pctPresent+'%' : '—'}</div>
+              <div style="font-size:11px;color:var(--text-3);">حاضر: ${att.present||0} | غايب: ${att.absent||0} | متأخر: ${att.late||0}</div>
+            </div>
+          </div>
+          ${s.scores.length ? `
+          <div style="font-size:12px;font-weight:700;color:var(--text-2);margin-bottom:6px;">الكويزات والدرجات</div>
+          <div class="table-wrap"><table style="font-size:12.5px;">
+            <thead><tr><th>الكويز</th><th>التاريخ</th><th>الدرجة</th><th>النسبة</th></tr></thead>
+            <tbody>
+              ${s.scores.map(sc => {
+                const pct = sc.score != null ? Math.round((sc.score/sc.max_score)*100) : null;
+                return `<tr>
+                  <td>${sc.title}</td>
+                  <td>${sc.quiz_date||'—'}</td>
+                  <td>${sc.score??'—'} / ${sc.max_score}</td>
+                  <td>${pct!=null ? `<span class="badge ${pct>=50?'badge-green':'badge-red'}">${pct}%</span>` : '—'}</td>
+                </tr>`;
+              }).join("")}
+            </tbody>
+          </table></div>` : `<div style="font-size:12.5px;color:var(--text-3);">لا يوجد درجات مسجلة بعد</div>`}
+        </div>
+      `;
+    }).join("");
+    icons();
+  } catch(e) {
+    el.innerHTML = `<span style="color:var(--danger);font-size:13px;">حصل خطأ في البحث</span>`;
+  }
+}
+
+
+
 const NOTE_TYPE_LABELS = {positive:"إيجابية", negative:"سلبية", neutral:"عادية"};
 const NOTE_TYPE_BADGE = {positive:"badge-green", negative:"badge-red", neutral:"badge-gray"};
 
@@ -2190,13 +2357,6 @@ async function loadMonthlyReport(studentId, canEditPayment){
       <thead><tr><th>الكويز</th><th>التاريخ</th><th>الدرجة</th></tr></thead>
       <tbody>${data.scores.map(s=>`<tr><td>${s.title}</td><td>${s.quiz_date||'—'}</td><td>${s.score??'—'} / ${s.max_score}</td></tr>`).join("") || `<tr><td colspan="3" style="text-align:center;color:var(--text-3);">لا يوجد كويزات</td></tr>`}</tbody>
     </table></div>
-    <div class="form-label">حالة الدفع</div>
-    <div style="display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap;">
-      <span class="badge ${pay&&pay.is_paid?'badge-green':'badge-red'}">${pay&&pay.is_paid?'مدفوع':'غير مدفوع'}</span>
-      ${pay&&pay.amount ? `<span style="font-size:13px;color:var(--text-2);">المبلغ: ${pay.amount} ج</span>` : ""}
-      ${pay&&pay.paid_date ? `<span style="font-size:13px;color:var(--text-2);">تاريخ الدفع: ${pay.paid_date}</span>` : ""}
-      ${canEditPayment ? `<button class="btn btn-ghost btn-sm" onclick="quickTogglePayment(${studentId}, '${month}', ${pay&&pay.is_paid?'true':'false'})">${pay&&pay.is_paid?'تعليم كغير مدفوع':'تعليم كمدفوع'}</button>` : ""}
-    </div>
   `;
 }
 
@@ -2242,10 +2402,6 @@ function printMonthlyReport(studentId, studentName){
     <h3>الحضور التفصيلي</h3>
     <table><thead><tr><th>التاريخ</th><th>الحالة</th></tr></thead>
     <tbody>${d.attendance.map(x=>`<tr><td>${x.session_date}</td><td>${ATT_LABELS[x.status]||x.status}</td></tr>`).join("") || `<tr><td colspan="2">لا يوجد سجل حضور</td></tr>`}</tbody></table>
-    <h3>حالة الدفع</h3>
-    <p><span class="badge ${d.payment&&d.payment.is_paid?'paid':'unpaid'}">${d.payment&&d.payment.is_paid?'مدفوع':'غير مدفوع'}</span>
-    ${d.payment&&d.payment.amount?` — المبلغ: ${d.payment.amount} ج`:''}
-    ${d.payment&&d.payment.paid_date?` — تاريخ الدفع: ${d.payment.paid_date}`:''}</p>
     <script>window.onload=()=>window.print();<\/script>
     </body></html>
   `);

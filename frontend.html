@@ -798,17 +798,81 @@ async function loadSupervisorsList(){ return await api("/api/users?role=supervis
 /* =====================================================================
    لوحة التحكم (Dashboard) - أدمن / مدرس
 ===================================================================== */
+const ARABIC_DAY_NAMES = ["الأحد","الإثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
+function getTodayArabicDayName(){
+  return ARABIC_DAY_NAMES[new Date().getDay()];
+}
+
+function renderTodayScheduleCard(todayName, items){
+  const greetings = [
+    "يلا بينا يا كابتن! 🔥", "وقت الشغل الجامد! 💪", "إنطلق بقوة النهاردة 🚀",
+    "يوم جديد، طاقة جديدة ⚡", "خليك حاضر بقوة النهاردة 🌟", "يلا نطلع نسخة أحسن من إمبارح 💯"
+  ];
+  const emptyMsgs = [
+    "مفيش مواعيد متسجلة النهاردة، خد الفرصة وارتاح شوية ☕🌿",
+    "يوم هادي بدون حصص مجدولة، استغله في حاجة تحبها 😌",
+    "جدولك فاضي النهاردة، يوم مناسب للتجهيز للحصص الجاية 📚",
+    "النهاردة يوم راحة من الجدول، استمتع بوقتك 🌤️"
+  ];
+  if (!items.length){
+    const msg = emptyMsgs[Math.floor(Math.random()*emptyMsgs.length)];
+    return `
+    <div class="table-card" style="padding:18px 20px;background:linear-gradient(135deg,var(--surface),var(--surface-2));margin-bottom:18px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+        <i data-lucide="calendar" style="width:18px;height:18px;color:var(--primary);"></i>
+        <b style="font-size:14.5px;">النهاردة ${todayName}</b>
+      </div>
+      <div style="font-size:13px;color:var(--text-2);">${msg}</div>
+    </div>`;
+  }
+  const greet = greetings[Math.floor(Math.random()*greetings.length)];
+  return `
+  <div class="table-card" style="padding:0;margin-bottom:18px;overflow:hidden;">
+    <div style="padding:16px 20px;background:linear-gradient(135deg,var(--primary),var(--primary-80));color:#fff;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+        <i data-lucide="calendar-check" style="width:18px;height:18px;"></i>
+        <b style="font-size:15px;">النهاردة ${todayName}</b>
+      </div>
+      <div style="font-size:13px;opacity:.92;">عندك ${items.length} ${items.length===1?'حصة':'حصص'} النهاردة، ${greet}</div>
+    </div>
+    <div style="padding:6px 0;">
+      ${items.map((it,idx)=>`
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 20px;${idx<items.length-1?'border-bottom:1px solid var(--border);':''}">
+          <div style="background:var(--surface-2);border-radius:var(--radius-md);padding:8px 12px;text-align:center;min-width:70px;">
+            <div style="font-size:13px;font-weight:700;color:var(--primary);">${it.start_time}</div>
+            ${it.end_time?`<div style="font-size:10.5px;color:var(--text-3);">${it.end_time}</div>`:""}
+          </div>
+          <div style="flex:1;">
+            <div style="font-weight:700;font-size:13.5px;">${it.title || "حصة"}</div>
+            <div style="font-size:12px;color:var(--text-3);">${it.group_name ? `مجموعة: ${it.group_name}` : "موعد عام"}${it.notes?(' • '+it.notes):''}</div>
+          </div>
+          <i data-lucide="arrow-left" style="width:14px;height:14px;color:var(--text-3);flex-shrink:0;"></i>
+        </div>
+      `).join("")}
+    </div>
+  </div>`;
+}
+
 async function renderDashboardPage(){
   const [groups, students, quizzes] = await Promise.all([
     loadGroups(), loadStudents(), api("/api/quizzes")
   ]);
   const supervisorsCount = SESSION.role === "admin" ? (await loadSupervisorsList()).length : null;
 
+  let todayScheduleHtml = "";
+  if (SESSION.role === "teacher"){
+    const schedule = await api("/api/schedule");
+    const todayName = getTodayArabicDayName();
+    const todayItems = schedule.filter(s=>s.day_of_week===todayName);
+    todayScheduleHtml = renderTodayScheduleCard(todayName, todayItems);
+  }
+
   const c = document.getElementById("pageContainer");
   c.innerHTML = `
     <div class="page-header">
       <div><h1>أهلاً، ${SESSION.full_name} 👋</h1><p>نظرة سريعة على حالة المنصة دلوقتي</p></div>
     </div>
+    ${todayScheduleHtml}
     <div class="stats-grid">
       <div class="stat-card"><div class="stat-top"><div class="stat-icon teal"><i data-lucide="users" style="width:18px;height:18px;"></i></div></div>
         <div class="stat-value">${groups.length}</div><div class="stat-label">عدد المجموعات</div></div>
@@ -837,6 +901,7 @@ async function renderDashboardPage(){
       </table></div>
     </div>
   `;
+  icons();
 }
 
 /* =====================================================================
@@ -1686,7 +1751,10 @@ let QUICK_ATT_STATUS_BY_SESSION = {1:"present", 2:"present", 3:"present", 4:"pre
 let ATT_ROWS_CACHE_BY_SESSION = {1:[], 2:[], 3:[], 4:[]};
 
 async function renderAttendancePage(){
-  const canEdit = SESSION.role !== "student";
+  if (SESSION.role === "admin" || SESSION.role === "teacher"){
+    return renderAttendanceStatsOnlyPage();
+  }
+  const canEdit = SESSION.role === "supervisor";
   window.ATT_CAN_EDIT = canEdit;
   const groups = await loadGroups();
   CACHE_ALL_GROUPS = groups;
@@ -1695,6 +1763,7 @@ async function renderAttendancePage(){
     <div class="page-header">
       <div><h1>الحضور والغياب</h1><p>سجل حضور كل حصة لوحدها، افتح الحصة اللي عايز تاخد غيابها</p></div>
       <div class="header-actions">
+        ${canEdit ? `<button class="btn btn-primary" onclick="openTakeAttendanceModal()"><i data-lucide="clipboard-check" style="width:14px;height:14px;"></i> أخذ الغياب</button>` : ""}
         <input class="form-input" id="att_date" type="date" value="${todayStr()}" style="width:150px;" onchange="loadAllAttendanceSessions()">
         ${groups.length>1 ? `<select class="filter-select" id="att_group" onchange="loadAllAttendanceSessions()"><option value="">كل المجموعات</option>${groupOptionsAll()}</select>` : ""}
         <select class="filter-select" id="att_status_filter" onchange="filterAttendanceRows()">
@@ -1711,6 +1780,102 @@ async function renderAttendancePage(){
   `;
   icons();
   await loadAllAttendanceSessions();
+}
+
+function openTakeAttendanceModal(){
+  openModal(
+    `<i data-lucide="clipboard-check" style="width:16px;height:16px;"></i> أخذ الغياب`,
+    `
+    <div style="margin-bottom:14px;">
+      <label class="form-label">رقم الحصة</label>
+      <select class="form-input" id="take_att_session_num">
+        ${[1,2,3,4].map(sn=>`<option value="${sn}">الحصة ${ATT_SESSION_NAMES[sn]}</option>`).join("")}
+      </select>
+    </div>
+    <div style="background:var(--surface-2);border-radius:var(--radius-md);padding:10px 14px;font-size:13px;color:var(--text-2);display:flex;align-items:center;gap:8px;">
+      <i data-lucide="calendar" style="width:14px;height:14px;color:var(--primary);"></i>
+      هيتم تسجيل الغياب بتاريخ النهارده <b>${todayStr()}</b> تلقائيًا
+    </div>
+    `,
+    `<button class="btn btn-ghost" onclick="closeOverlay('genericModal')">إلغاء</button>
+     <button class="btn btn-primary" onclick="startTakeAttendance()"><i data-lucide="play" style="width:14px;height:14px;"></i> ابدأ أخذ الغياب</button>`
+  );
+}
+
+async function startTakeAttendance(){
+  const sn = parseInt(document.getElementById("take_att_session_num").value);
+  closeOverlay("genericModal");
+  const dateInput = document.getElementById("att_date");
+  if (dateInput) dateInput.value = todayStr();
+  await loadAllAttendanceSessions();
+  // اقفل كل الحصص واسيب الحصة المطلوبة مفتوحة بس
+  [1,2,3,4].forEach(num=>{
+    const body = document.getElementById(`att_session_body_${num}`);
+    const card = document.getElementById(`att_session_card_${num}`);
+    if (!body || !card) return;
+    const header = card.querySelector(".collapse-header");
+    const icon = header ? header.querySelector(".collapse-icon") : null;
+    body.style.display = (num === sn) ? "block" : "none";
+    if (icon) icon.setAttribute("data-lucide", num === sn ? "chevron-up" : "chevron-down");
+  });
+  icons();
+  const card = document.getElementById(`att_session_card_${sn}`);
+  if (card) card.scrollIntoView({behavior:"smooth", block:"start"});
+  setTimeout(()=>{
+    const codeInput = document.getElementById(`quick_att_code_${sn}`);
+    if (codeInput) codeInput.focus();
+  }, 350);
+}
+
+async function renderAttendanceStatsOnlyPage(){
+  const groups = await loadGroups();
+  CACHE_ALL_GROUPS = groups;
+  const c = document.getElementById("pageContainer");
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1>الحضور والغياب</h1><p>احصائيات حضور وغياب الطلاب حسب الحصة</p></div>
+      <div class="header-actions">
+        <input class="form-input" id="att_date" type="date" value="${todayStr()}" style="width:150px;" onchange="loadAttendanceStatsOnly()">
+        ${groups.length>1 ? `<select class="filter-select" id="att_group" onchange="loadAttendanceStatsOnly()"><option value="">كل المجموعات</option>${groupOptionsAll()}</select>` : ""}
+      </div>
+    </div>
+    <div class="table-card">
+      <div class="table-wrap"><table>
+        <thead><tr><th>الحصة</th><th>حاضر</th><th>غايب</th><th>متأخر</th><th>بإذن</th><th>لسه ملوش حالة</th><th>نسبة الحضور</th></tr></thead>
+        <tbody id="attStatsTableBody"><tr><td colspan="7" class="loading-row"><span class="spinner"></span> بتحمّل...</td></tr></tbody>
+      </table></div>
+    </div>
+  `;
+  await loadAttendanceStatsOnly();
+}
+
+async function loadAttendanceStatsOnly(){
+  const date = document.getElementById("att_date")?.value || todayStr();
+  const groupSel = document.getElementById("att_group");
+  const group_id = groupSel ? groupSel.value : "";
+  const tbody = document.getElementById("attStatsTableBody");
+  const rowsPerSession = await Promise.all([1,2,3,4].map(sn=>{
+    const qs = group_id ? `?group_id=${group_id}&session_number=${sn}` : `?session_number=${sn}`;
+    return api(`/api/attendance/${date}${qs}`);
+  }));
+  tbody.innerHTML = [1,2,3,4].map((sn, idx)=>{
+    const rows = rowsPerSession[idx] || [];
+    const counts = {present:0, absent:0, late:0, excused:0};
+    rows.forEach(r=>{ if (r.status && counts.hasOwnProperty(r.status)) counts[r.status]++; });
+    const total = rows.length;
+    const marked = counts.present + counts.absent + counts.late + counts.excused;
+    const unmarked = total - marked;
+    const rate = total ? Math.round((counts.present/total)*100) : 0;
+    return `<tr>
+      <td class="td-name">الحصة ${ATT_SESSION_NAMES[sn]}</td>
+      <td><span class="badge badge-green">${counts.present}</span></td>
+      <td><span class="badge badge-red">${counts.absent}</span></td>
+      <td><span class="badge badge-amber">${counts.late}</span></td>
+      <td><span class="badge badge-blue">${counts.excused}</span></td>
+      <td><span class="badge badge-gray">${unmarked}</span></td>
+      <td style="font-weight:700;">${total ? rate+'%' : '—'}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="7" style="text-align:center;color:var(--text-3);padding:24px;">لا يوجد بيانات</td></tr>`;
 }
 
 function renderAttendanceSessionShell(sn, isOpen, canEdit){

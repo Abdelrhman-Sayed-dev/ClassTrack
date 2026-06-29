@@ -94,6 +94,19 @@ class QuizIn(BaseModel):
     group_id: Optional[int] = None  # لو فاضي يبقى الكويز عام لكل المجموعات
 
 
+class HomeworkIn(BaseModel):
+    group_id: int
+    session_number: int
+    session_date: Optional[str] = None
+    description: str
+
+
+class HomeworkSubmissionIn(BaseModel):
+    student_id: int
+    done: Optional[bool] = None
+    notes: Optional[str] = None
+
+
 class QuizScoreIn(BaseModel):
     student_id: int
     quiz_id: int
@@ -1139,19 +1152,23 @@ def get_student_scores(student_id: int, session=Depends(get_current_session)):
 
 @app.get("/api/attendance/{session_date}")
 def get_attendance_by_date(session_date: str, group_id: Optional[int] = None,
+                            session_number: int = 1,
                             session=Depends(get_current_session)):
-    """كل الطلاب (أو طلاب مجموعة معينة) مع حالة حضورهم في تاريخ معين"""
+    """كل الطلاب (أو طلاب مجموعة معينة) مع حالة حضورهم في تاريخ وحصة معينة"""
     with get_connection() as conn:
         if session["role"] == "supervisor" and group_id:
             assert_supervisor_owns_group(conn, session, group_id)
 
         query = """
-            SELECT s.id as student_id, s.full_name, a.status, a.notes, a.id as attendance_id, s.group_id
+            SELECT s.id as student_id, s.full_name, a.status, a.notes, a.id as attendance_id,
+                   a.session_number, s.group_id
             FROM students s
-            LEFT JOIN attendance a ON a.student_id = s.id AND a.session_date = ?
+            LEFT JOIN attendance a ON a.student_id = s.id
+                AND a.session_date = ?
+                AND a.session_number = ?
             WHERE 1=1
         """
-        params = [session_date]
+        params = [session_date, session_number]
         if group_id:
             query += " AND s.group_id = ?"
             params.append(group_id)
@@ -1400,9 +1417,9 @@ def get_monthly_report(student_id: int, month: str, session=Depends(get_current_
             raise HTTPException(status_code=403, detail="التقرير الشهري متاح للمدرس والمشرف والأدمن بس")
 
         attendance_rows = conn.execute("""
-            SELECT session_date, status FROM attendance
+            SELECT session_date, session_number, status FROM attendance
             WHERE student_id = ? AND session_date LIKE ?
-            ORDER BY session_date
+            ORDER BY session_date, session_number
         """, (student_id, f"{month}%")).fetchall()
         attendance = [dict(r) for r in attendance_rows]
         att_summary = {"present": 0, "absent": 0, "late": 0, "excused": 0}
@@ -1437,6 +1454,131 @@ def get_monthly_report(student_id: int, month: str, session=Depends(get_current_
             "average_percentage": avg_pct,
             "payment": dict(payment) if payment else None,
         }
+
+
+# ---------------------------------------------------------------------------
+# الواجبات - Homework
+# ---------------------------------------------------------------------------
+
+@app.get("/api/homework")
+def get_homework(group_id: Optional[int] = None, session=Depends(get_current_session)):
+    """جلب الواجبات مع عدد المسلّمين لكل مجموعة"""
+    with get_connection() as conn:
+        query = """
+            SELECT h.id, h.group_id, h.session_number, h.session_date, h.description,
+                   g.name as group_name,
+                   (SELECT COUNT(*) FROM homework_submissions hs WHERE hs.homework_id=h.id AND hs.done=1) as done_count,
+                   (SELECT COUNT(*) FROM students s WHERE s.group_id=h.group_id AND s.is_active=1) as total_count
+            FROM homework h
+            JOIN groups g ON g.id = h.group_id
+            WHERE 1=1
+        """
+        params = []
+        if group_id:
+            query += " AND h.group_id = ?"
+            params.append(group_id)
+        if session["role"] == "supervisor":
+            query += " AND g.supervisor_id = ?"
+            params.append(session["id"])
+        elif session["role"] == "student":
+            query += " AND h.group_id = ?"
+            params.append(session.get("group_id"))
+        query += " ORDER BY h.session_number DESC"
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.post("/api/homework")
+def add_homework(data: HomeworkIn, session=Depends(require_roles("admin", "teacher", "supervisor"))):
+    with get_connection() as conn:
+        if session["role"] == "supervisor":
+            assert_supervisor_owns_group(conn, session, data.group_id)
+        try:
+            cur = conn.execute(
+                "INSERT INTO homework (group_id, session_number, session_date, description, created_by) VALUES (?,?,?,?,?)",
+                (data.group_id, data.session_number, data.session_date, data.description, session["id"])
+            )
+            hw_id = cur.lastrowid
+            # إنشاء سجلات تسليم لكل طلاب المجموعة تلقائياً
+            students = conn.execute(
+                "SELECT id FROM students WHERE group_id=? AND is_active=1", (data.group_id,)
+            ).fetchall()
+            for s in students:
+                conn.execute(
+                    "INSERT OR IGNORE INTO homework_submissions (homework_id, student_id) VALUES (?,?)",
+                    (hw_id, s["id"])
+                )
+            return {"id": hw_id, "message": "تم إضافة الواجب"}
+        except Exception:
+            raise HTTPException(status_code=400, detail="في واجب موجود بالفعل لنفس الحصة دي")
+
+
+@app.put("/api/homework/{hw_id}")
+def update_homework(hw_id: int, data: HomeworkIn, session=Depends(require_roles("admin", "teacher", "supervisor"))):
+    with get_connection() as conn:
+        if session["role"] == "supervisor":
+            assert_supervisor_owns_group(conn, session, data.group_id)
+        conn.execute(
+            "UPDATE homework SET description=?, session_date=? WHERE id=?",
+            (data.description, data.session_date, hw_id)
+        )
+        return {"message": "تم تعديل الواجب"}
+
+
+@app.delete("/api/homework/{hw_id}")
+def delete_homework(hw_id: int, session=Depends(require_roles("admin", "teacher", "supervisor"))):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM homework WHERE id=?", (hw_id,))
+        return {"message": "تم حذف الواجب"}
+
+
+@app.get("/api/homework/{hw_id}/submissions")
+def get_homework_submissions(hw_id: int, session=Depends(require_roles("admin", "teacher", "supervisor"))):
+    """جلب حالة تسليم الواجب لكل طلاب المجموعة"""
+    with get_connection() as conn:
+        hw = conn.execute("SELECT group_id FROM homework WHERE id=?", (hw_id,)).fetchone()
+        if not hw:
+            raise HTTPException(status_code=404, detail="الواجب غير موجود")
+        if session["role"] == "supervisor":
+            assert_supervisor_owns_group(conn, session, hw["group_id"])
+        rows = conn.execute("""
+            SELECT s.id as student_id, s.full_name,
+                   hs.done, hs.notes
+            FROM students s
+            LEFT JOIN homework_submissions hs ON hs.student_id=s.id AND hs.homework_id=?
+            WHERE s.group_id=? AND s.is_active=1
+            ORDER BY s.full_name
+        """, (hw_id, hw["group_id"])).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.post("/api/homework/{hw_id}/submissions")
+def save_homework_submission(hw_id: int, data: HomeworkSubmissionIn,
+                              session=Depends(require_roles("admin", "teacher", "supervisor"))):
+    with get_connection() as conn:
+        hw = conn.execute("SELECT group_id FROM homework WHERE id=?", (hw_id,)).fetchone()
+        if not hw:
+            raise HTTPException(status_code=404, detail="الواجب غير موجود")
+        if session["role"] == "supervisor":
+            assert_supervisor_owns_group(conn, session, hw["group_id"])
+        # جلب السجل الحالي
+        existing = conn.execute(
+            "SELECT * FROM homework_submissions WHERE homework_id=? AND student_id=?",
+            (hw_id, data.student_id)
+        ).fetchone()
+        if existing:
+            done_val = data.done if data.done is not None else existing["done"]
+            notes_val = data.notes if data.notes is not None else existing["notes"]
+            conn.execute(
+                "UPDATE homework_submissions SET done=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE homework_id=? AND student_id=?",
+                (done_val, notes_val, hw_id, data.student_id)
+            )
+        else:
+            conn.execute(
+                "INSERT INTO homework_submissions (homework_id, student_id, done, notes) VALUES (?,?,?,?)",
+                (hw_id, data.student_id, data.done, data.notes)
+            )
+        return {"message": "تم الحفظ"}
 
 
 # ---------------------------------------------------------------------------

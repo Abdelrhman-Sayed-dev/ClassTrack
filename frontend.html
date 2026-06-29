@@ -64,6 +64,7 @@ button{font-family:'Cairo',sans-serif;}
 
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;}
 .topbar{height:52px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;flex-shrink:0;}
+.topbar-left{display:flex;align-items:center;gap:10px;}
 .topbar-left .breadcrumb{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text-3);}
 .topbar-left .breadcrumb b{color:var(--text);font-weight:600;}
 .topbar-right{display:flex;align-items:center;gap:6px;}
@@ -75,7 +76,7 @@ button{font-family:'Cairo',sans-serif;}
 .page-header p{font-size:12.5px;color:var(--text-2);margin-top:2px;}
 .header-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 
-.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px;}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:18px;}
 @media (max-width:1100px){.stats-grid{grid-template-columns:repeat(2,1fr);}}
 .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;box-shadow:var(--shadow-sm);position:relative;overflow:hidden;transition:box-shadow .15s var(--ease),border-color .15s var(--ease);}
 .stat-card:hover{box-shadow:var(--shadow-md);border-color:var(--border-2);}
@@ -678,6 +679,7 @@ const NAV_BY_ROLE = {
   ],
   student: [
     {id:"mydashboard", label:"لوحتي", icon:"layout-dashboard"},
+    {id:"myhomework", label:"واجباتي", icon:"clipboard-list"},
     {id:"myscores", label:"درجاتي", icon:"file-check-2"},
     {id:"myattendance", label:"حضوري", icon:"calendar-check"},
     {id:"myboard", label:"سبورة مجموعتي", icon:"presentation"},
@@ -740,7 +742,7 @@ const PAGE_TITLES = {
   dashboard:"لوحة التحكم", groups:"المجموعات", students:"الطلاب",
   supervisors:"المشرفين", teachers:"المدرسين", schedule:"جدول المواعيد",
   quizzes:"الكويزات", attendance:"الحضور والغياب", boards:"سبورة الحصص",
-  mygroup:"مجموعتي", mydashboard:"لوحتي", myscores:"درجاتي",
+  mygroup:"مجموعتي", mydashboard:"لوحتي", myscores:"درجاتي", myhomework:"واجباتي",
   myattendance:"حضوري", myboard:"سبورة مجموعتي",
   student_search:"بحث عن طالب",
 };
@@ -765,6 +767,7 @@ async function renderPage(page){
       mydashboard: renderStudentDashboardPage,
       myscores: renderMyScoresPage,
       myattendance: renderMyAttendancePage,
+      myhomework: renderMyHomeworkPage,
       myboard: renderMyBoardPage,
       student_search: renderStudentSearchPage,
     };
@@ -1677,26 +1680,23 @@ async function saveQuizScore(quizId, studentId, value, inputEl){
 ===================================================================== */
 const ATT_LABELS = {present:"حاضر", absent:"غايب", late:"متأخر", excused:"بإذن"};
 const ATT_BADGE = {present:"badge-green", absent:"badge-red", late:"badge-amber", excused:"badge-blue"};
+const ATT_SESSION_NAMES = ["","الأولى","الثانية","الثالثة","الرابعة"];
 
-let QUICK_ATT_STATUS = "present";
+let QUICK_ATT_STATUS_BY_SESSION = {1:"present", 2:"present", 3:"present", 4:"present"};
+let ATT_ROWS_CACHE_BY_SESSION = {1:[], 2:[], 3:[], 4:[]};
 
 async function renderAttendancePage(){
   const canEdit = SESSION.role !== "student";
+  window.ATT_CAN_EDIT = canEdit;
   const groups = await loadGroups();
   CACHE_ALL_GROUPS = groups;
   const c = document.getElementById("pageContainer");
   c.innerHTML = `
     <div class="page-header">
-      <div><h1>الحضور والغياب</h1><p>سجل حضور الطلاب يوم بيوم</p></div>
+      <div><h1>الحضور والغياب</h1><p>سجل حضور كل حصة لوحدها، افتح الحصة اللي عايز تاخد غيابها</p></div>
       <div class="header-actions">
-        <input class="form-input" id="att_date" type="date" value="${todayStr()}" style="width:150px;" onchange="loadAttendanceTable()">
-        <select class="filter-select" id="att_session_num" onchange="loadAttendanceTable()" title="رقم الحصة">
-          <option value="1">الحصة الأولى</option>
-          <option value="2">الحصة الثانية</option>
-          <option value="3">الحصة الثالثة</option>
-          <option value="4">الحصة الرابعة</option>
-        </select>
-        ${groups.length>1 ? `<select class="filter-select" id="att_group" onchange="loadAttendanceTable()"><option value="">كل المجموعات</option>${groupOptionsAll()}</select>` : ""}
+        <input class="form-input" id="att_date" type="date" value="${todayStr()}" style="width:150px;" onchange="loadAllAttendanceSessions()">
+        ${groups.length>1 ? `<select class="filter-select" id="att_group" onchange="loadAllAttendanceSessions()"><option value="">كل المجموعات</option>${groupOptionsAll()}</select>` : ""}
         <select class="filter-select" id="att_status_filter" onchange="filterAttendanceRows()">
           <option value="">كل الحالات</option>
           <option value="unmarked">غير محدد</option>
@@ -1705,160 +1705,161 @@ async function renderAttendancePage(){
       </div>
     </div>
 
-    <div class="stats-grid" id="attStatsGrid">
-      <div class="stat-card"><div class="stat-top"><div class="stat-icon green"><i data-lucide="check" style="width:16px;height:16px;"></i></div></div><div class="stat-value" id="st_present">0</div><div class="stat-label">حاضر</div></div>
-      <div class="stat-card"><div class="stat-top"><div class="stat-icon red"><i data-lucide="x" style="width:16px;height:16px;"></i></div></div><div class="stat-value" id="st_absent">0</div><div class="stat-label">غايب</div></div>
-      <div class="stat-card"><div class="stat-top"><div class="stat-icon amber"><i data-lucide="clock" style="width:16px;height:16px;"></i></div></div><div class="stat-value" id="st_late">0</div><div class="stat-label">متأخر</div></div>
-      <div class="stat-card"><div class="stat-top"><div class="stat-icon blue"><i data-lucide="shield-check" style="width:16px;height:16px;"></i></div></div><div class="stat-value" id="st_excused">0</div><div class="stat-label">بإذن</div></div>
+    <div id="attSessionsWrap">
+      ${[1,2,3,4].map((sn, idx)=>renderAttendanceSessionShell(sn, idx===0, canEdit)).join("")}
     </div>
+  `;
+  icons();
+  await loadAllAttendanceSessions();
+}
 
-    ${canEdit ? `
-    <div class="table-card">
-      <div class="toolbar"><b style="font-size:13px;display:flex;align-items:center;gap:6px;"><i data-lucide="zap" style="width:14px;height:14px;color:var(--primary);"></i> تسجيل سريع بكود الطالب</b></div>
-      <div style="padding:14px 16px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
-        <div style="flex:1;min-width:200px;">
-          <label class="form-label">كود الطالب</label>
-          <input class="form-input" id="quick_att_code" placeholder="مثال: ST-4F92AB" style="font-family:monospace;" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();submitQuickAttendance();}">
+function renderAttendanceSessionShell(sn, isOpen, canEdit){
+  const label = ATT_SESSION_NAMES[sn] || sn;
+  return `
+    <div class="collapse-card" id="att_session_card_${sn}">
+      <div class="collapse-header" onclick="toggleCollapse('att_session_body_${sn}', this)">
+        <div style="display:flex;align-items:center;gap:10px;flex:1;flex-wrap:wrap;">
+          <i data-lucide="calendar-check" style="width:15px;height:15px;color:var(--primary);flex-shrink:0;"></i>
+          <span style="font-weight:700;font-size:14px;">الحصة ${label}</span>
+          <div style="display:flex;gap:6px;margin-right:auto;flex-wrap:wrap;" id="att_session_badges_${sn}"></div>
         </div>
-        <div>
-          <label class="form-label">الحالة</label>
-          <div class="pill-group" id="quickAttPills">
-            ${Object.keys(ATT_LABELS).map(k=>`<button type="button" class="pill-btn ${k===QUICK_ATT_STATUS?'active':''}" data-status="${k}" onclick="setQuickAttStatus('${k}')"><span class="dot"></span>${ATT_LABELS[k]}</button>`).join("")}
-          </div>
-        </div>
-        <button class="btn btn-primary" onclick="submitQuickAttendance()"><i data-lucide="check" style="width:14px;height:14px;"></i> تسجيل</button>
+        <i data-lucide="${isOpen?'chevron-up':'chevron-down'}" class="collapse-icon" style="width:16px;height:16px;color:var(--text-3);transition:transform .2s;"></i>
       </div>
-      <div id="quick_att_result" style="padding:0 16px 14px;"></div>
-    </div>` : ""}
-
-    <div class="table-card">
-      <div class="table-wrap"><table>
-        <thead><tr><th>#</th><th>الطالب</th><th>الحالة</th><th>ملاحظات</th>${canEdit?'<th></th>':''}</tr></thead>
-        <tbody id="attTableBody"><tr><td colspan="5" class="loading-row"><span class="spinner"></span> بتحمّل...</td></tr></tbody>
-      </table></div>
-    </div>
-
-    <div class="table-card" style="margin-bottom:0;">
-      <div class="toolbar" style="justify-content:space-between;">
-        <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;color:var(--text-2);">
-          <span><b style="color:var(--success);">●</b> حاضر: <b id="sm_present">0</b></span>
-          <span><b style="color:var(--danger);">●</b> غايب: <b id="sm_absent">0</b></span>
-          <span><b style="color:var(--warning);">●</b> متأخر: <b id="sm_late">0</b></span>
-          <span><b style="color:var(--info);">●</b> بإذن: <b id="sm_excused">0</b></span>
+      <div class="collapse-body" id="att_session_body_${sn}" style="display:${isOpen?'block':'none'};">
+        ${canEdit ? `
+        <div style="padding:14px 16px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;border-bottom:1px solid var(--border);">
+          <div style="flex:1;min-width:200px;">
+            <label class="form-label">كود الطالب</label>
+            <input class="form-input" id="quick_att_code_${sn}" placeholder="مثال: ST-4F92AB" style="font-family:monospace;" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();submitQuickAttendance(${sn});}">
+          </div>
+          <div>
+            <label class="form-label">الحالة</label>
+            <div class="pill-group" id="quickAttPills_${sn}">
+              ${Object.keys(ATT_LABELS).map(k=>`<button type="button" class="pill-btn ${k===QUICK_ATT_STATUS_BY_SESSION[sn]?'active':''}" data-status="${k}" onclick="setQuickAttStatus(${sn}, '${k}')"><span class="dot"></span>${ATT_LABELS[k]}</button>`).join("")}
+            </div>
+          </div>
+          <button class="btn btn-primary" onclick="submitQuickAttendance(${sn})"><i data-lucide="check" style="width:14px;height:14px;"></i> تسجيل</button>
         </div>
-        <div style="font-size:12.5px;color:var(--text-2);font-weight:600;">نسبة الحضور: <span id="sm_percentage" style="color:var(--primary);font-size:14px;">0%</span></div>
+        <div id="quick_att_result_${sn}" style="padding:10px 16px 0;"></div>
+        ` : ""}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>الطالب</th><th>الحالة</th><th>ملاحظات</th></tr></thead>
+            <tbody id="attTableBody_${sn}"><tr><td colspan="4" class="loading-row"><span class="spinner"></span> بتحمّل...</td></tr></tbody>
+          </table>
+        </div>
       </div>
     </div>
   `;
-  window.ATT_CAN_EDIT = canEdit;
-  await loadAttendanceTable();
-  if (canEdit){
-    const codeInput = document.getElementById("quick_att_code");
-    if (codeInput) codeInput.focus();
-  }
 }
 
-function setQuickAttStatus(status){
-  QUICK_ATT_STATUS = status;
-  document.querySelectorAll("#quickAttPills .pill-btn").forEach(b=>{
+function setQuickAttStatus(sn, status){
+  QUICK_ATT_STATUS_BY_SESSION[sn] = status;
+  document.querySelectorAll(`#quickAttPills_${sn} .pill-btn`).forEach(b=>{
     b.classList.toggle("active", b.dataset.status === status);
   });
 }
 
-let ATT_ROWS_CACHE = [];
+async function loadAllAttendanceSessions(){
+  await Promise.all([1,2,3,4].map(sn=>loadAttendanceTableForSession(sn)));
+}
 
-async function loadAttendanceTable(){
-  const date = document.getElementById("att_date").value || todayStr();
+async function loadAttendanceTableForSession(sn){
+  const date = document.getElementById("att_date")?.value || todayStr();
   const groupSel = document.getElementById("att_group");
   const group_id = groupSel ? groupSel.value : "";
-  const sessionNum = document.getElementById("att_session_num")?.value || "1";
-  let qs = group_id ? `?group_id=${group_id}&session_number=${sessionNum}` : `?session_number=${sessionNum}`;
+  let qs = group_id ? `?group_id=${group_id}&session_number=${sn}` : `?session_number=${sn}`;
   const rows = await api(`/api/attendance/${date}${qs}`);
-  ATT_ROWS_CACHE = rows;
+  ATT_ROWS_CACHE_BY_SESSION[sn] = rows;
   const canEdit = window.ATT_CAN_EDIT;
-  const sessionLabel = ["","الأولى","الثانية","الثالثة","الرابعة"][parseInt(sessionNum)] || sessionNum;
-  document.getElementById("attTableBody").innerHTML = rows.map(r=>`
+  const tbody = document.getElementById(`attTableBody_${sn}`);
+  if (!tbody) return;
+  tbody.innerHTML = rows.map(r=>`
     <tr data-status="${r.status || 'unmarked'}">
       <td style="color:var(--text-3);font-family:monospace;font-size:12px;">#${r.student_id}</td>
       <td class="td-name">${r.full_name}</td>
       <td>
         ${canEdit ? `
         <div class="pill-group sm">
-          ${Object.keys(ATT_LABELS).map(k=>`<button type="button" class="pill-btn ${r.status===k?'active':''}" data-status="${k}" onclick="saveAttendance('${date}', ${r.student_id}, '${k}', this, ${sessionNum})"><span class="dot"></span>${ATT_LABELS[k]}</button>`).join("")}
+          ${Object.keys(ATT_LABELS).map(k=>`<button type="button" class="pill-btn ${r.status===k?'active':''}" data-status="${k}" onclick="saveAttendance('${date}', ${r.student_id}, '${k}', this, ${sn})"><span class="dot"></span>${ATT_LABELS[k]}</button>`).join("")}
         </div>` : (r.status ? `<span class="badge ${ATT_BADGE[r.status]}">${ATT_LABELS[r.status]}</span>` : `<span class="badge badge-gray">لسه ملوش حضور</span>`)}
       </td>
       <td>
-        ${canEdit ? `<input class="form-input" style="height:30px;font-size:12px;min-width:130px;" placeholder="ملاحظة..." value="${(r.notes||"").replace(/"/g,'&quot;')}" onchange="saveAttendanceNote('${date}', ${r.student_id}, this.value, ${sessionNum})">`
+        ${canEdit ? `<input class="form-input" style="height:30px;font-size:12px;min-width:130px;" placeholder="ملاحظة..." value="${(r.notes||"").replace(/"/g,'&quot;')}" onchange="saveAttendanceNote('${date}', ${r.student_id}, this.value, ${sn})">`
                    : `<span class="td-sub">${r.notes || "—"}</span>`}
       </td>
-      ${canEdit ? `<td class="td-actions"></td>` : ""}
-    </tr>`).join("") || `<tr><td colspan="5" style="text-align:center;color:var(--text-3);padding:30px;">لا يوجد طلاب</td></tr>`;
+    </tr>`).join("") || `<tr><td colspan="4" style="text-align:center;color:var(--text-3);padding:24px;">لا يوجد طلاب</td></tr>`;
+  updateAttendanceSessionBadges(sn);
   filterAttendanceRows();
-  updateAttendanceStats();
   icons();
 }
 
-function updateAttendanceStats(){
+function updateAttendanceSessionBadges(sn){
+  const rows = ATT_ROWS_CACHE_BY_SESSION[sn] || [];
   const counts = {present:0, absent:0, late:0, excused:0};
-  let marked = 0;
-  ATT_ROWS_CACHE.forEach(r=>{ if (r.status && counts.hasOwnProperty(r.status)){ counts[r.status]++; marked++; } });
-  const total = ATT_ROWS_CACHE.length || 1;
-  Object.keys(counts).forEach(k=>{
-    const top = document.getElementById("st_"+k);
-    const sm = document.getElementById("sm_"+k);
-    if (top) top.textContent = counts[k];
-    if (sm) sm.textContent = counts[k];
-  });
-  const pct = ATT_ROWS_CACHE.length ? Math.round((counts.present / ATT_ROWS_CACHE.length) * 100) : 0;
-  const pctEl = document.getElementById("sm_percentage");
-  if (pctEl) pctEl.textContent = pct + "%";
+  rows.forEach(r=>{ if (r.status && counts.hasOwnProperty(r.status)) counts[r.status]++; });
+  const total = rows.length;
+  const marked = counts.present + counts.absent + counts.late + counts.excused;
+  const el = document.getElementById(`att_session_badges_${sn}`);
+  if (!el) return;
+  el.innerHTML = total ? `
+    <span class="badge badge-green">${counts.present} حاضر</span>
+    <span class="badge badge-red">${counts.absent} غايب</span>
+    ${marked < total ? `<span class="badge badge-gray">${total-marked} لسه</span>` : ""}
+  ` : `<span class="badge badge-gray">لا يوجد طلاب</span>`;
 }
 
 function filterAttendanceRows(){
   const filterEl = document.getElementById("att_status_filter");
   const filter = filterEl ? filterEl.value : "";
-  document.querySelectorAll("#attTableBody tr[data-status]").forEach(row=>{
+  document.querySelectorAll("[id^='attTableBody_'] tr[data-status]").forEach(row=>{
     row.style.display = (!filter || row.dataset.status === filter) ? "" : "none";
   });
 }
 
-async function saveAttendance(date, studentId, status, btnEl, sessionNum=1){
+async function saveAttendance(date, studentId, status, btnEl, sn=1){
   if (!status) return;
   if (btnEl){
     btnEl.closest(".pill-group").querySelectorAll(".pill-btn").forEach(b=>b.classList.remove("active"));
     btnEl.classList.add("active");
   }
-  await api("/api/attendance", {method:"POST", body: JSON.stringify({student_id: studentId, session_date: date, status, session_number: parseInt(sessionNum)})});
+  await api("/api/attendance", {method:"POST", body: JSON.stringify({student_id: studentId, session_date: date, status, session_number: parseInt(sn)})});
   showToast("تم حفظ الحضور", "success");
-  const row = ATT_ROWS_CACHE.find(r=>r.student_id===studentId);
-  if (row) row.status = status;
-  updateAttendanceStats();
+  const rows = ATT_ROWS_CACHE_BY_SESSION[sn] || [];
+  const row = rows.find(r=>r.student_id===studentId);
+  if (row){
+    row.status = status;
+    const tr = btnEl ? btnEl.closest("tr") : null;
+    if (tr) tr.dataset.status = status;
+  }
+  updateAttendanceSessionBadges(sn);
+  filterAttendanceRows();
 }
 
-async function saveAttendanceNote(date, studentId, notes, sessionNum=1){
-  const row = ATT_ROWS_CACHE.find(r=>r.student_id===studentId);
+async function saveAttendanceNote(date, studentId, notes, sn=1){
+  const rows = ATT_ROWS_CACHE_BY_SESSION[sn] || [];
+  const row = rows.find(r=>r.student_id===studentId);
   const status = row && row.status ? row.status : "present";
-  await api("/api/attendance", {method:"POST", body: JSON.stringify({student_id: studentId, session_date: date, status, notes, session_number: parseInt(sessionNum)})});
+  await api("/api/attendance", {method:"POST", body: JSON.stringify({student_id: studentId, session_date: date, status, notes, session_number: parseInt(sn)})});
   if (row) row.notes = notes;
   showToast("تم حفظ الملاحظة", "success");
 }
 
-async function submitQuickAttendance(){
-  const codeInput = document.getElementById("quick_att_code");
+async function submitQuickAttendance(sn){
+  const codeInput = document.getElementById(`quick_att_code_${sn}`);
   const code = codeInput.value.trim();
-  const status = QUICK_ATT_STATUS;
+  const status = QUICK_ATT_STATUS_BY_SESSION[sn] || "present";
   const date = document.getElementById("att_date").value || todayStr();
-  const sessionNum = parseInt(document.getElementById("att_session_num")?.value || "1");
-  const resultEl = document.getElementById("quick_att_result");
+  const resultEl = document.getElementById(`quick_att_result_${sn}`);
   if (!code){ showToast("لازم تكتب كود الطالب", "error"); return; }
-  const sessionLabel = ["","الأولى","الثانية","الثالثة","الرابعة"][sessionNum] || sessionNum;
+  const sessionLabel = ATT_SESSION_NAMES[sn] || sn;
   try{
-    const res = await api("/api/attendance/by-code", {method:"POST", body: JSON.stringify({access_code: code, session_date: date, status, session_number: sessionNum})});
+    const res = await api("/api/attendance/by-code", {method:"POST", body: JSON.stringify({access_code: code, session_date: date, status, session_number: sn})});
     resultEl.innerHTML = `<span class="badge badge-green"><i data-lucide="check" style="width:12px;height:12px;"></i> "${res.student_name}" - ${ATT_LABELS[status]} - الحصة ${sessionLabel}</span>`;
     codeInput.value = "";
     codeInput.focus();
     icons();
-    loadAttendanceTable();
+    loadAttendanceTableForSession(sn);
   }catch(e){
     resultEl.innerHTML = `<span class="badge badge-red">مفيش طالب بالكود ده</span>`;
     codeInput.value = "";
@@ -2312,6 +2313,73 @@ async function renderMyAttendancePage(){
       </table></div>
     </div>
   `;
+}
+
+/* =====================================================================
+   واجباتي - Student Homework Submission
+===================================================================== */
+async function renderMyHomeworkPage(){
+  const c = document.getElementById("pageContainer");
+  const groupId = SESSION.group_id;
+  if (!groupId){
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i data-lucide="clipboard-list" style="width:26px;height:26px;"></i></div><div class="empty-title">معندك مجموعة لسه</div><div class="empty-desc">كلم الأدمن عشان يعينك على مجموعة.</div></div>`;
+    return;
+  }
+  c.innerHTML = `
+    <div class="page-header"><div><h1>واجباتي</h1><p>واجبات مجموعتك حصة بحصة، سلّم واجبك وشوف ملاحظات مشرفك</p></div></div>
+    <div id="myHomeworkWrap"><div class="empty-state"><div class="empty-title">بتحمّل...</div></div></div>
+  `;
+  await loadMyHomework();
+}
+
+async function loadMyHomework(){
+  const groupId = SESSION.group_id;
+  const homeworks = await api(`/api/homework?group_id=${groupId}`);
+  const wrap = document.getElementById("myHomeworkWrap");
+  if (!wrap) return;
+  if (!homeworks.length){
+    wrap.innerHTML = `<div class="empty-state"><div class="empty-icon"><i data-lucide="clipboard-list" style="width:26px;height:26px;"></i></div><div class="empty-title">لا يوجد واجبات لسه</div><div class="empty-desc">مشرفك لسه ملضافش واجبات لمجموعتك.</div></div>`;
+    return;
+  }
+  // نجيب حالة تسليمي لكل واجب بالتوازي
+  const subsLists = await Promise.all(homeworks.map(hw=>api(`/api/homework/${hw.id}/submissions`).catch(()=>[])));
+  const sorted = homeworks.map((hw, idx)=>({hw, mine: (subsLists[idx]||[]).find(s=>s.student_id===SESSION.id) || null}))
+    .sort((a,b)=>b.hw.session_number - a.hw.session_number);
+
+  wrap.innerHTML = sorted.map(({hw, mine})=>{
+    const done = mine && mine.done;
+    const label = ATT_SESSION_NAMES?.[hw.session_number] || hw.session_number;
+    return `
+    <div class="table-card" id="my_hw_card_${hw.id}">
+      <div class="toolbar" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <i data-lucide="presentation" style="width:14px;height:14px;color:var(--primary);"></i>
+          <b style="font-size:13.5px;">الحصة ${label}</b>
+          ${hw.session_date ? `<span style="font-size:12px;color:var(--text-3);">${hw.session_date}</span>` : ""}
+        </div>
+        <span class="badge ${done?'badge-green':'badge-gray'}" id="my_hw_badge_${hw.id}">${done?'تم التسليم ✅':'لسه ملسلمتوش'}</span>
+      </div>
+      <div style="padding:14px 16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--text-3);margin-bottom:6px;">الواجب</div>
+        <div style="font-size:13.5px;color:var(--text);margin-bottom:12px;">${hw.description||'واجب الحصة'}</div>
+        ${mine && mine.notes ? `
+        <div style="background:var(--surface-2);border-radius:var(--radius-md);padding:10px 14px;margin-bottom:12px;border-right:3px solid var(--primary);">
+          <div style="font-size:11px;font-weight:700;color:var(--text-3);margin-bottom:3px;">ملاحظة مشرفك</div>
+          <div style="font-size:13px;color:var(--text);">${mine.notes}</div>
+        </div>` : ""}
+        <button class="btn ${done?'btn-ghost':'btn-primary'} btn-sm" id="my_hw_btn_${hw.id}" onclick="toggleMyHomeworkSubmit(${hw.id}, ${done?'false':'true'})">
+          <i data-lucide="${done?'rotate-ccw':'check'}" style="width:13px;height:13px;"></i> ${done?'تراجع عن التسليم':'تسليم الواجب'}
+        </button>
+      </div>
+    </div>`;
+  }).join("");
+  icons();
+}
+
+async function toggleMyHomeworkSubmit(hwId, done){
+  await api(`/api/homework/${hwId}/submissions`, {method:"POST", body: JSON.stringify({student_id: SESSION.id, done})});
+  showToast(done ? "تم تسليم الواجب ✅" : "تم التراجع عن التسليم", done?"success":"info");
+  await loadMyHomework();
 }
 
 async function renderMyBoardPage(){

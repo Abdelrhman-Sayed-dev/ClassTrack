@@ -106,12 +106,14 @@ class AttendanceIn(BaseModel):
     session_date: str
     status: str  # present / absent / late / excused
     notes: Optional[str] = None
+    session_number: int = 1  # رقم الحصة في نفس اليوم (لو في أكتر من حصة)
 
 
 class AttendanceCodeIn(BaseModel):
     access_code: str
     session_date: str
     status: str
+    session_number: int = 1
 
 
 class LoginIn(BaseModel):
@@ -471,8 +473,37 @@ def get_groups(stage_id: Optional[int] = None, governorate_id: Optional[int] = N
         return [dict(r) for r in rows]
 
 
-@app.post("/api/groups")
-def add_group(group: GroupIn, session=Depends(require_roles("admin"))):
+@app.get("/api/groups/{group_id}/info")
+def get_group_info(group_id: int, session=Depends(get_current_session)):
+    """بيانات مجموعة معينة + بيانات المشرف (اسمه ورقمه) + مواعيد المجموعة"""
+    with get_connection() as conn:
+        group = conn.execute("""
+            SELECT g.id, g.name, g.notes, g.session_price, g.supervisor_id,
+                   st.name as stage_name, gov.name as governorate_name,
+                   u.full_name as supervisor_name, u.phone as supervisor_phone
+            FROM groups g
+            JOIN stages st ON st.id = g.stage_id
+            JOIN governorates gov ON gov.id = g.governorate_id
+            LEFT JOIN users u ON u.id = g.supervisor_id
+            WHERE g.id = ?
+        """, (group_id,)).fetchone()
+        if not group:
+            raise HTTPException(status_code=404, detail="المجموعة غير موجودة")
+
+        # مواعيد المجموعة من جدول المواعيد
+        schedule = conn.execute("""
+            SELECT day_of_week, start_time, end_time, title
+            FROM teacher_schedule
+            WHERE group_id = ?
+            ORDER BY day_of_week, start_time
+        """, (group_id,)).fetchall()
+
+        result = dict(group)
+        result["schedule"] = [dict(s) for s in schedule]
+        return result
+
+
+
     with get_connection() as conn:
         try:
             cur = conn.execute(
@@ -542,6 +573,49 @@ def delete_group(group_id: int, session=Depends(require_roles("admin"))):
 # ---------------------------------------------------------------------------
 # الطلاب - Students
 # ---------------------------------------------------------------------------
+
+@app.get("/api/students/search")
+def search_students(q: str = "", session=Depends(require_roles("admin", "teacher", "supervisor"))):
+    """البحث عن طالب بالاسم أو الـ ID - يرجع بياناته + كل درجاته في الكويزات"""
+    with get_connection() as conn:
+        query = """
+            SELECT s.id, s.full_name, s.phone, s.parent_phone, s.group_id,
+                   g.name as group_name, st.name as stage_name, gov.name as governorate_name
+            FROM students s
+            JOIN groups g ON g.id = s.group_id
+            JOIN stages st ON st.id = g.stage_id
+            JOIN governorates gov ON gov.id = g.governorate_id
+            WHERE (s.full_name LIKE ? OR CAST(s.id AS TEXT) = ?)
+        """
+        params = [f"%{q}%", q.strip()]
+        if session["role"] == "supervisor":
+            query += " AND g.supervisor_id = ?"
+            params.append(session["id"])
+        query += " ORDER BY s.full_name LIMIT 20"
+
+        students = conn.execute(query, params).fetchall()
+        result = []
+        for s in students:
+            sd = dict(s)
+            # جلب كل درجات الطالب
+            scores = conn.execute("""
+                SELECT q.title, q.quiz_date, q.max_score, qs.score, qs.id as score_id
+                FROM quiz_scores qs
+                JOIN quizzes q ON q.id = qs.quiz_id
+                WHERE qs.student_id = ?
+                ORDER BY q.quiz_date DESC
+            """, (s["id"],)).fetchall()
+            sd["scores"] = [dict(sc) for sc in scores]
+            # ملخص الحضور
+            att = conn.execute("""
+                SELECT status, COUNT(*) as cnt FROM attendance
+                WHERE student_id = ? GROUP BY status
+            """, (s["id"],)).fetchall()
+            att_summary = {r["status"]: r["cnt"] for r in att}
+            sd["attendance_summary"] = att_summary
+            result.append(sd)
+        return result
+
 
 @app.get("/api/students")
 def get_students(group_id: Optional[int] = None, stage_id: Optional[int] = None,
@@ -1103,11 +1177,11 @@ def set_attendance(att: AttendanceIn, session=Depends(require_roles("admin", "te
             assert_supervisor_owns_group(conn, session, student["group_id"])
 
         conn.execute("""
-            INSERT INTO attendance (student_id, session_date, status, notes)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(student_id, session_date)
+            INSERT INTO attendance (student_id, session_date, session_number, status, notes)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(student_id, session_date, session_number)
             DO UPDATE SET status=excluded.status, notes=excluded.notes
-        """, (att.student_id, att.session_date, att.status, att.notes))
+        """, (att.student_id, att.session_date, att.session_number, att.status, att.notes))
         return {"message": "تم حفظ الحضور"}
 
 
@@ -1142,11 +1216,11 @@ def set_attendance_by_code(data: AttendanceCodeIn, session=Depends(require_roles
             assert_supervisor_owns_group(conn, session, student["group_id"])
 
         conn.execute("""
-            INSERT INTO attendance (student_id, session_date, status)
-            VALUES (?, ?, ?)
-            ON CONFLICT(student_id, session_date)
+            INSERT INTO attendance (student_id, session_date, session_number, status)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(student_id, session_date, session_number)
             DO UPDATE SET status=excluded.status
-        """, (student["id"], data.session_date, data.status))
+        """, (student["id"], data.session_date, data.session_number, data.status))
         return {"message": "تم تسجيل الحضور", "student_name": student["full_name"], "student_id": student["id"]}
 
 
